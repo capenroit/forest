@@ -1,0 +1,421 @@
+import 'package:flutter/material.dart';
+
+import '../data_entry/monitoring_tree_survival_form.dart';
+import '../service/api_service.dart';
+
+class TreeSurvivalMonitoringPage extends StatefulWidget {
+  const TreeSurvivalMonitoringPage({super.key});
+
+  @override
+  State<TreeSurvivalMonitoringPage> createState() =>
+      _TreeSurvivalMonitoringPageState();
+}
+
+class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage> {
+  final List<Map<String, dynamic>> _items = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecentActivities();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F5F7),
+      appBar: AppBar(
+        backgroundColor: const Color.fromARGB(255, 31, 103, 78),
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Row(
+          children: const [
+            Icon(Icons.monitor_heart_rounded, color: Colors.white, size: 32),
+            SizedBox(width: 12),
+            Text(
+              'Monitoring of Tree Survival',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: RefreshIndicator(
+        onRefresh: () => _loadRecentActivities(showLoader: false),
+        child: Column(
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 10),
+              child: Row(
+                children: [
+                  Text(
+                    'Recent Activity',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w800,
+                      color: Color(0xFF23253B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(child: _buildBody()),
+          ],
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: Container(
+        decoration: BoxDecoration(
+          color: const Color.fromARGB(255, 200, 230, 220),
+          borderRadius: BorderRadius.circular(50),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: IconButton(
+          onPressed: _openAddDialog,
+          icon: const Icon(
+            Icons.add,
+            color: Color.fromARGB(255, 31, 103, 78),
+          ),
+          iconSize: 35,
+          tooltip: 'Add new record',
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.redAccent),
+              ),
+              const SizedBox(height: 10),
+              ElevatedButton(
+                onPressed: _loadRecentActivities,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_items.isEmpty) {
+      return const Center(
+        child: Text(
+          'No tree survival records yet.',
+          style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
+        ),
+      );
+    }
+
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 88),
+      itemCount: _items.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        return _buildActivityCard(_items[index]);
+      },
+    );
+  }
+
+  Widget _buildActivityCard(Map<String, dynamic> row) {
+    final activityName = (row['activity_name'] ?? '').toString().trim();
+    final municipality = (row['municipality'] ?? '').toString().trim();
+    final barangay = (row['barangay'] ?? '').toString().trim();
+    final quarter = (row['quarter'] as num?)?.toInt();
+    final treesSurvived =
+        (row['number_tree_survived'] as num?)?.toInt() ??
+            (row['number_tree_sur'] as num?)?.toInt() ??
+            0;
+
+    final dateRaw = row['date']?.toString() ?? '';
+    final parsedDate = DateTime.tryParse(dateRaw) ?? DateTime.now();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x11000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: _buildLabelValue(
+                        label: 'Activity Name',
+                        value: activityName.isNotEmpty ? activityName : 'N/A',
+                        valueStyle: const TextStyle(
+                          fontSize: 24,
+                          height: 1.1,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF25273B),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: _buildLabelValue(
+                        label: 'Municipality',
+                        value: municipality.isEmpty ? 'N/A' : municipality,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: _buildLabelValue(
+                        label: 'Barangay',
+                        value: barangay.isEmpty ? 'N/A' : barangay,
+                      ),
+                    ),
+                    const SizedBox(width: 18),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(child: _buildDate(parsedDate)),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: _buildLabelValue(
+                        label: 'Quarter',
+                        value: quarter != null ? 'Q$quarter' : 'N/A',
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    _buildTreesSurvived(treesSurvived),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Positioned(
+            top: -4,
+            right: -10,
+            child: IconButton(
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                color: Color(0xFF8A8DA3),
+              ),
+              tooltip: 'More',
+              onPressed: () {},
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLabelValue({
+    required String label,
+    required String value,
+    TextStyle? valueStyle,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Color(0xFF777A90),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: valueStyle ??
+              const TextStyle(
+                fontSize: 18,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF25273B),
+              ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDate(DateTime date) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Date',
+          style: TextStyle(
+            fontSize: 12,
+            color: Color(0xFF777A90),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Row(
+          children: [
+            const Icon(
+              Icons.calendar_today_rounded,
+              size: 14,
+              color: Color(0xFF9B9DAE),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              _formatDate(date),
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF666A80),
+                height: 1,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTreesSurvived(int treesSurvived) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        const Text(
+          'Trees Survived',
+          style: TextStyle(
+            fontSize: 12,
+            color: Color(0xFF777A90),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          '$treesSurvived',
+          style: const TextStyle(
+            fontSize: 33,
+            height: 1,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFF22232F),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _loadRecentActivities({bool showLoader = true}) async {
+    if (showLoader && mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
+
+    try {
+      final items = await ApiService.getTreeSurvivalMonitoringRecords(
+        limit: 200,
+      );
+
+      final activityIds = items
+          .map((row) => (row['activity_id'] as num?)?.toInt())
+          .whereType<int>()
+          .toSet()
+          .toList();
+
+      final infoBySeqId = await ApiService.getTreeGrowingActivityInfoBySeqIds(
+        activityIds,
+      );
+
+      final enrichedItems = items.map((row) {
+        final activityId = (row['activity_id'] as num?)?.toInt();
+        final info = activityId != null ? infoBySeqId[activityId] : null;
+        return {
+          ...row,
+          'activity_name': info?['activity_name'],
+          'municipality': info?['municipality'],
+          'barangay': info?['barangay'],
+        };
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _items
+          ..clear()
+          ..addAll(enrichedItems);
+        _isLoading = false;
+        _errorMessage = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Failed to load records: $e';
+      });
+    }
+  }
+
+  String _formatDate(DateTime date) {
+    final year = date.year.toString().padLeft(4, '0');
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
+  Future<void> _openAddDialog() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: MonitoringTreeSurvivalForm(
+          municipalities: const [],
+          barangays: const [],
+          onSave: () {
+            Navigator.pop(dialogContext);
+            _loadRecentActivities(showLoader: false);
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+}
+

@@ -1,0 +1,558 @@
+import 'package:flutter/material.dart';
+
+import '../data_entry/flora_fauna_form.dart';
+import '../service/api_service.dart';
+
+class CapizFloraFaunaRecentActivityPage extends StatefulWidget {
+  const CapizFloraFaunaRecentActivityPage({super.key});
+
+  @override
+  State<CapizFloraFaunaRecentActivityPage> createState() =>
+      _CapizFloraFaunaRecentActivityPageState();
+}
+
+class _CapizFloraFaunaRecentActivityPageState
+    extends State<CapizFloraFaunaRecentActivityPage> {
+  final List<FloraFaunaEntry> _recentActivities = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRecentActivities();
+  }
+
+  Future<void> _loadRecentActivities({bool showLoader = true}) async {
+    if (showLoader && mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
+
+    try {
+      final rows = await ApiService.getRecentFloraFaunaSurveys(limit: 100);
+      final mapped = rows.map((row) {
+        final activityName = (row['activity_name'] ?? '').toString().trim();
+        final details = (row['details'] ?? '').toString().trim();
+        final observer = (row['observer'] ?? '').toString().trim();
+        final municipality = (row['municipality'] ?? '').toString().trim();
+        final barangay = (row['barangay'] ?? '').toString().trim();
+        final surveyDate = DateTime.tryParse(
+            (row['survey_date'] ?? row['created_at'] ?? row['updated_at'] ?? '')
+              .toString(),
+          ) ??
+          DateTime.now();
+
+        const entryType = 'Survey';
+        final speciesName =
+            activityName.isNotEmpty ? activityName : 'Survey Record';
+
+        return FloraFaunaEntry(
+          id: (row['id'] as num?)?.toInt(),
+          activityName: activityName,
+          entryType: entryType,
+          speciesName: speciesName,
+          scientificName: details,
+          municipality: municipality,
+          barangay: barangay,
+          surveyDate: surveyDate,
+          observer: observer,
+        );
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _recentActivities
+          ..clear()
+          ..addAll(mapped);
+        _isLoading = false;
+        _errorMessage = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Failed to load recent activity: $e';
+      });
+    }
+  }
+
+  Future<void> _openAddDialog({FloraFaunaEntry? initialEntry, int? index}) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: FloraFaunaForm(
+          initialData: initialEntry,
+          onSave: (entry) {
+            Navigator.pop(dialogContext);
+            if (!mounted) return;
+            _loadRecentActivities(showLoader: false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(index == null
+                    ? 'Survey entry added.'
+                    : 'Survey entry updated.'),
+              ),
+            );
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+
+  void _confirmRemove(int index) {
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+          contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          actionsPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          title: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: Color(0xFFC62828),
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Delete Activity?',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF22232F),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'This record will be removed from Recent Activity. You can not undo this action.',
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.35,
+              color: Color(0xFF5E6175),
+            ),
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                side: const BorderSide(color: Color(0xFFD4D7E5)),
+              ),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  color: Color(0xFF4E526A),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.delete_rounded, size: 18),
+              label: const Text(
+                'Delete',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+
+                final surveyId = _recentActivities[index].id;
+                if (surveyId == null) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Unable to remove record.'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                  return;
+                }
+
+                try {
+                  await ApiService.softDeleteFloraFaunaSurvey(surveyId);
+                  if (!mounted) return;
+
+                  await _loadRecentActivities(showLoader: false);
+
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Survey entry removed.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Unable to remove record: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF4F5F7),
+      appBar: AppBar(
+        backgroundColor: const Color.fromARGB(255, 31, 103, 78),
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: const Text(
+          'Capiz Flora and Fauna Survey',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ),
+      body: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Recent Activity',
+                style: TextStyle(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF23253B),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _errorMessage != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _errorMessage!,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(color: Colors.redAccent),
+                              ),
+                              const SizedBox(height: 10),
+                              ElevatedButton(
+                                onPressed: _loadRecentActivities,
+                                child: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    : RefreshIndicator(
+                        onRefresh: () => _loadRecentActivities(showLoader: false),
+                        child: _recentActivities.isEmpty
+                            ? ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: const EdgeInsets.all(20),
+                                children: const [
+                                  SizedBox(height: 120),
+                                  Center(
+                                    child: Text(
+                                      'No flora/fauna survey records yet.',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Color(0xFF636780),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : ListView.separated(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                                itemCount: _recentActivities.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                                itemBuilder: (context, index) {
+                                  final activity = _recentActivities[index];
+                                  return _RecentActivityCard(
+                                    activity: activity,
+                                    onEdit: () => _openAddDialog(
+                                      initialEntry: activity,
+                                      index: index,
+                                    ),
+                                    onRemove: () => _confirmRemove(index),
+                                  );
+                                },
+                              ),
+                      ),
+          ),
+        ],
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: Container(
+        decoration: BoxDecoration(
+          color: const Color.fromARGB(255, 200, 230, 220),
+          borderRadius: BorderRadius.circular(50),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: IconButton(
+          onPressed: _openAddDialog,
+          icon: const Icon(
+            Icons.add,
+            color: Color.fromARGB(255, 31, 103, 78),
+          ),
+          iconSize: 35,
+          tooltip: 'Add new survey record',
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentActivityCard extends StatelessWidget {
+  const _RecentActivityCard({
+    required this.activity,
+    required this.onEdit,
+    required this.onRemove,
+  });
+
+  final FloraFaunaEntry activity;
+  final VoidCallback onEdit;
+  final VoidCallback onRemove;
+
+  static const _menuEdit = 'edit';
+  static const _menuRemove = 'remove';
+
+  @override
+  Widget build(BuildContext context) {
+    final chipColor = activity.entryType == 'Fauna'
+        ? const Color(0xFF1565C0)
+        : const Color(0xFF2E7D32);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x11000000),
+            blurRadius: 8,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      activity.speciesName,
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1F2937),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      activity.scientificName,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontStyle: FontStyle.italic,
+                        color: Color(0xFF4B5563),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  PopupMenuButton<String>(
+                    padding: EdgeInsets.zero,
+                    icon: const Icon(
+                      Icons.more_vert,
+                      color: Color(0xFF6B7280),
+                    ),
+                    onSelected: (value) {
+                      if (value == _menuEdit) {
+                        onEdit();
+                      } else if (value == _menuRemove) {
+                        onRemove();
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem<String>(
+                        value: _menuEdit,
+                        child: Row(
+                          children: [
+                            Icon(Icons.edit_outlined, size: 18),
+                            SizedBox(width: 10),
+                            Text('Edit'),
+                          ],
+                        ),
+                      ),
+                      PopupMenuItem<String>(
+                        value: _menuRemove,
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline,
+                                size: 18, color: Colors.red),
+                            SizedBox(width: 10),
+                            Text('Remove', style: TextStyle(color: Colors.red)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: chipColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      activity.entryType,
+                      style: TextStyle(
+                        color: chipColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              _LabelValue(
+                label: 'Municipality',
+                value: activity.municipality,
+              ),
+              _LabelValue(
+                label: 'Barangay',
+                value: activity.barangay,
+              ),
+              _LabelValue(
+                label: 'Observer',
+                value: activity.observer,
+              ),
+              _LabelValue(
+                label: 'Survey Date',
+                value: _formatDate(activity.surveyDate),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _formatDate(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
+  }
+}
+
+class _LabelValue extends StatelessWidget {
+  const _LabelValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 170,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF6B7280),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF111827),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
