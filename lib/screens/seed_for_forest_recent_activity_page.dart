@@ -94,6 +94,7 @@ class _SeedForForestRecentActivityPageState
                       activity: activity,
                       onEdit: () => _editActivity(activity),
                       onRemove: () => _removeDonation(activity),
+                      onStatusTap: () => _changeStatus(activity),
                     );
                   },
                 );
@@ -174,7 +175,7 @@ class _SeedForForestRecentActivityPageState
 
     final headerRow = await _supabase
         .from('seed_donation')
-        .select('id, donor_name, donated_date, total_count, details')
+        .select('id, donor_name, donated_date, total_count, details, status, is_converted')
         .eq('id', donationId)
         .maybeSingle();
 
@@ -213,7 +214,372 @@ class _SeedForForestRecentActivityPageState
       date: donatedDate,
       totalCount: totalCount,
       remarks: (headerRow['details'] ?? '').toString(),
+      status: (headerRow['status'] ?? 'DONATED').toString(),
+      isConverted: (headerRow['is_converted'] as bool?) ?? false,
     );
+  }
+
+  Future<List<SeedDetail>> _loadSeedDetailsForDonation(int? donationId) async {
+    if (donationId == null) return const [];
+
+    try {
+      final detailRows = await _supabase
+          .from('seed_donation_data')
+          .select('seed_id, seed_count, species_type')
+          .eq('seed_donation_id', donationId);
+
+      final seedOptions = await _seedlingListService.getSeedlingOptions();
+      final seedNameById = {
+        for (final option in seedOptions) option.id: option.name,
+      };
+
+      return (detailRows as List<dynamic>).map((row) {
+        final data = Map<String, dynamic>.from(row as Map);
+        final seedId = (data['seed_id'] as num?)?.toInt() ?? 0;
+        return SeedDetail(
+          seedId: seedId,
+          speciesType: (data['species_type'] ?? '').toString(),
+          speciesName: seedNameById[seedId] ?? 'Seed $seedId',
+          speciesCount: (data['seed_count'] as num?)?.toInt() ?? 0,
+        );
+      }).toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> _changeStatus(SeedForForestEntry activity) async {
+    const statusOptions = [
+      ('DONATED', Icons.volunteer_activism_rounded),
+      ('PROPAGATED', Icons.eco_rounded),
+    ];
+
+    var selectedStatus = statusOptions.any((o) => o.$1 == activity.status)
+        ? activity.status
+        : 'DONATED';
+
+    final seedDetails = await _loadSeedDetailsForDonation(activity.id);
+
+    if (!mounted) return;
+
+    final updatedStatus = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              insetPadding: const EdgeInsets.all(16),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  color: Colors.white,
+                ),
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Color(0xFF1F674E),
+                            Color(0xFF1B8B5E),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(20),
+                          topRight: Radius.circular(20),
+                        ),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.sync_alt_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Update Status',
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Move this donation to its next stage',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (seedDetails.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Seedlings in this donation',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.grey.shade600,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: Colors.grey.shade200),
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  for (var i = 0; i < seedDetails.length; i++) ...[
+                                    if (i > 0) const Divider(height: 1),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 8),
+                                      child: Row(
+                                        children: [
+                                          Icon(Icons.eco,
+                                              size: 16,
+                                              color: Colors.green.shade600),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              seedDetails[i]
+                                                      .speciesName
+                                                      .trim()
+                                                      .isEmpty
+                                                  ? 'Unspecified'
+                                                  : seedDetails[i].speciesName,
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                                color: Color(0xFF25273B),
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          Text(
+                                            '${seedDetails[i].speciesCount}',
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF1B8B5E),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'Status',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.grey.shade600,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          ...statusOptions.map((option) {
+                            final (value, icon) = option;
+                            final isSelected = selectedStatus == value;
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(12),
+                                  onTap: () =>
+                                      setDialogState(() => selectedStatus = value),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 150),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(12),
+                                      color: isSelected
+                                          ? const Color(0xFF1B8B5E)
+                                              .withValues(alpha: 0.1)
+                                          : Colors.grey.shade50,
+                                      border: Border.all(
+                                        color: isSelected
+                                            ? const Color(0xFF1B8B5E)
+                                            : Colors.grey.shade200,
+                                        width: isSelected ? 1.5 : 1,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          icon,
+                                          size: 20,
+                                          color: isSelected
+                                              ? const Color(0xFF1B8B5E)
+                                              : Colors.grey.shade500,
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            value,
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: isSelected
+                                                  ? const Color(0xFF1B8B5E)
+                                                  : const Color(0xFF3A3D4D),
+                                            ),
+                                          ),
+                                        ),
+                                        Icon(
+                                          isSelected
+                                              ? Icons.radio_button_checked_rounded
+                                              : Icons.radio_button_unchecked_rounded,
+                                          size: 20,
+                                          color: isSelected
+                                              ? const Color(0xFF1B8B5E)
+                                              : Colors.grey.shade400,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              style: OutlinedButton.styleFrom(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                side: BorderSide(color: Colors.grey.shade300),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: const Text(
+                                'Cancel',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF4E526A),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(selectedStatus),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF1B8B5E),
+                                foregroundColor: Colors.white,
+                                elevation: 0,
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                              ),
+                              child: const Text(
+                                'Update',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (updatedStatus == null ||
+        updatedStatus == activity.status ||
+        activity.id == null) {
+      return;
+    }
+
+    try {
+      await _supabase
+          .from('seed_donation')
+          .update({'status': updatedStatus}).eq('id', activity.id!);
+
+      if (!mounted) return;
+      setState(() {
+        _recentActivitiesFuture = _loadRecentActivities();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Status updated to $updatedStatus.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update status: $e')),
+      );
+    }
   }
 
   Future<void> _removeDonation(SeedForForestEntry activity) async {
@@ -328,7 +694,7 @@ class _SeedForForestRecentActivityPageState
   Future<List<SeedForForestEntry>> _loadRecentActivities() async {
     final response = await _supabase
         .from('seed_donation')
-        .select('id, donor_name, donated_date, total_count, details, created_at')
+        .select('id, donor_name, donated_date, total_count, details, created_at, status, is_converted')
         .order('donated_date', ascending: false)
         .order('created_at', ascending: false)
         .limit(100);
@@ -347,6 +713,8 @@ class _SeedForForestRecentActivityPageState
             date: donatedDate,
             totalCount: totalCount,
             remarks: (data['details'] ?? '').toString(),
+            status: (data['status'] ?? 'DONATED').toString(),
+            isConverted: (data['is_converted'] as bool?) ?? false,
           );
         })
         .toList();
@@ -358,16 +726,24 @@ class _RecentActivityCard extends StatelessWidget {
     required this.activity,
     required this.onEdit,
     required this.onRemove,
+    required this.onStatusTap,
   });
 
   final SeedForForestEntry activity;
   final VoidCallback onEdit;
   final VoidCallback onRemove;
+  final VoidCallback onStatusTap;
 
   @override
   Widget build(BuildContext context) {
+    final isPlantable = activity.status.toUpperCase() == 'PLANTABLE';
+    final statusColor = switch (activity.status.toUpperCase()) {
+      'PLANTABLE' => const Color(0xFF1B8B5E),
+      'PROPAGATED' => const Color(0xFFB07C1F),
+      _ => const Color(0xFF6B7280),
+    };
+
     return Container(
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -379,56 +755,121 @@ class _RecentActivityCard extends StatelessWidget {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                flex: 3,
-                child: _RowColumn(
-                  label: 'Donor Name',
-                  value: activity.donorName,
-                  valueMaxLines: 2,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: isPlantable ? null : onStatusTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: _RowColumn(
+                        label: 'Donor Name',
+                        value: activity.donorName,
+                        valueMaxLines: 2,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: _RowColumn(
+                        label: 'Date',
+                        value: _formatDate(activity.date),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: _RowColumn(
+                        label: 'Total Seed Donated',
+                        value: activity.totalCount.toString(),
+                        valueColor: const Color(0xFF1B8B5E),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    PopupMenuButton<String>(
+                      tooltip: 'Actions',
+                      enabled: !isPlantable,
+                      onSelected: (value) {
+                        if (value == 'edit') {
+                          onEdit();
+                        } else if (value == 'remove') {
+                          onRemove();
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        PopupMenuItem(value: 'remove', child: Text('Remove')),
+                      ],
+                      icon: Icon(
+                        Icons.more_vert,
+                        color: isPlantable ? Colors.grey.shade300 : null,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: _RowColumn(
-                  label: 'Date',
-                  value: _formatDate(activity.date),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        activity.status.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.4,
+                          color: statusColor,
+                        ),
+                      ),
+                    ),
+                    if (activity.isConverted) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF2E7DD7).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.inventory_2_rounded,
+                                size: 12, color: Color(0xFF2E7DD7)),
+                            SizedBox(width: 4),
+                            Text(
+                              'IN INVENTORY',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 0.4,
+                                color: Color(0xFF2E7DD7),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: _RowColumn(
-                  label: 'Total Seed Donated',
-                  value: activity.totalCount.toString(),
-                  valueColor: const Color(0xFF1B8B5E),
-                ),
-              ),
-              const SizedBox(width: 8),
-              PopupMenuButton<String>(
-                tooltip: 'Actions',
-                onSelected: (value) {
-                  if (value == 'edit') {
-                    onEdit();
-                  } else if (value == 'remove') {
-                    onRemove();
-                  }
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(value: 'edit', child: Text('Edit')),
-                  PopupMenuItem(value: 'remove', child: Text('Remove')),
-                ],
-                icon: const Icon(Icons.more_vert),
-              ),
-            ],
+              ],
+            ),
           ),
-        ],
+        ),
       ),
     );
   }

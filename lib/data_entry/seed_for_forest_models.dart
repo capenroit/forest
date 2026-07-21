@@ -19,6 +19,8 @@ class SeedForForestEntry {
   final DateTime date;
   final int totalCount;
   final String remarks;
+  final String status;
+  final bool isConverted;
 
   const SeedForForestEntry({
     this.id,
@@ -27,5 +29,7 @@ class SeedForForestEntry {
     required this.date,
     required this.totalCount,
     required this.remarks,
+    this.status = 'DONATED',
+    this.isConverted = false,
   });
 }

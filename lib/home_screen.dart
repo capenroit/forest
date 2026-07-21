@@ -8,6 +8,7 @@ import 'screens/login_screen.dart';
 import 'screens/report_page.dart';
 import 'screens/seed_for_forest_recent_activity_page.dart';
 import 'screens/seedling_inventory_page.dart';
+import 'screens/seedling_request_page.dart';
 import 'screens/settings_page.dart';
 import 'screens/tree_growing_page.dart';
 import 'screens/tree_survival_monitoring_page.dart';
@@ -214,6 +215,15 @@ class _SidePanelState extends State<SidePanel> {
                       context,
                       MaterialPageRoute(
                         builder: (_) => const SeedlingInventoryPage(),
+                      ),
+                    );
+                  }),
+                  _buildNavItem(Icons.assignment_outlined, "Seedling Request", () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const SeedlingRequestPage(),
                       ),
                     );
                   }),
