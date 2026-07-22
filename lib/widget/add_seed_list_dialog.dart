@@ -7,12 +7,10 @@ class AddSeedListDialog extends StatefulWidget {
   const AddSeedListDialog({
     super.key,
     required this.seedInventory,
-    required this.speciesTypeInventory,
     required this.onAdd,
   });
 
   final List<LookupOption> seedInventory;
-  final List<LookupOption> speciesTypeInventory;
   final ValueChanged<SeedDetail> onAdd;
 
   @override
@@ -23,7 +21,6 @@ class _AddSeedListDialogState extends State<AddSeedListDialog> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _speciesCountController = TextEditingController();
   LookupOption? _selectedSeed;
-  LookupOption? _selectedSpeciesType;
 
   @override
   void dispose() {
@@ -56,13 +53,12 @@ class _AddSeedListDialogState extends State<AddSeedListDialog> {
   void _submit() {
     if (!_formKey.currentState!.validate()) return;
     final selectedSeed = _selectedSeed;
-    final selectedSpeciesType = _selectedSpeciesType;
-    if (selectedSeed == null || selectedSpeciesType == null) return;
+    if (selectedSeed == null) return;
 
     widget.onAdd(
       SeedDetail(
         seedId: selectedSeed.id,
-        speciesType: selectedSpeciesType.name,
+        speciesType: '',
         speciesName: selectedSeed.name,
         speciesCount: int.parse(_speciesCountController.text.trim()),
       ),
@@ -111,7 +107,7 @@ class _AddSeedListDialogState extends State<AddSeedListDialog> {
                         ),
                       ),
                       Text(
-                        'Set seed type, name, and count',
+                        'Set species name and count',
                         style: TextStyle(fontSize: 11, color: Colors.white70),
                       ),
                     ],
@@ -128,48 +124,7 @@ class _AddSeedListDialogState extends State<AddSeedListDialog> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Species Type',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.grey.shade700,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      DropdownButtonFormField<String>(
-                        initialValue: _selectedSpeciesType?.name,
-                        items: widget.speciesTypeInventory
-                            .map(
-                              (option) => DropdownMenuItem<String>(
-                                value: option.name,
-                                child: Text(option.name),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedSpeciesType = widget.speciesTypeInventory
-                                .cast<LookupOption?>()
-                                .firstWhere(
-                                  (option) => option?.name == value,
-                                  orElse: () => null,
-                                );
-                          });
-                        },
-                        decoration: _inputDecoration(
-                          hint: 'Choose species type',
-                          icon: Icons.eco_outlined,
-                        ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Species type is required';
-                          }
-                          return null;
-                        },
-                        isExpanded: true,
-                      ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 4),
                       Text(
                         'Species Name',
                         style: TextStyle(

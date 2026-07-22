@@ -121,7 +121,7 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
               child: Row(
                 children: [
                   Text(
-                    'Available Seedling',
+                    'Available Plantable Seedling',
                     style: TextStyle(
                       fontSize: 32,
                       fontWeight: FontWeight.w800,
@@ -132,31 +132,73 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
               ),
             ),
             Expanded(child: _buildBody()),
+            if (!_isLoading && _errorMessage == null) _buildTotalFooter(),
           ],
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-      floatingActionButton: Container(
-        decoration: BoxDecoration(
-          color: const Color.fromARGB(255, 200, 230, 220),
-          borderRadius: BorderRadius.circular(50),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.15),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
-          ],
+      floatingActionButton: Padding(
+        padding: EdgeInsets.only(
+          bottom: !_isLoading && _errorMessage == null ? 64 : 0,
         ),
-        child: IconButton(
-          onPressed: _openDataEntryDialog,
-          icon: const Icon(
-            Icons.add,
-            color: Color.fromARGB(255, 31, 103, 78),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color.fromARGB(255, 200, 230, 220),
+            borderRadius: BorderRadius.circular(50),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.15),
+                blurRadius: 12,
+                offset: const Offset(0, 4),
+              ),
+            ],
           ),
-          iconSize: 35,
-          tooltip: 'Add inventory entry',
+          child: IconButton(
+            onPressed: _openDataEntryDialog,
+            icon: const Icon(
+              Icons.add,
+              color: Color.fromARGB(255, 31, 103, 78),
+            ),
+            iconSize: 35,
+            tooltip: 'Add inventory entry',
+          ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildTotalFooter() {
+    final total = _items.fold<int>(0, (sum, item) => sum + item.totalQuantity);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          top: BorderSide(color: Colors.grey.shade200),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            'Total Available Plantable Seedling',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Colors.grey.shade700,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            total.toString(),
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF1B8B5E),
+            ),
+          ),
+        ],
       ),
     );
   }

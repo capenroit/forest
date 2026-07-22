@@ -3,7 +3,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'seed_for_forest_models.dart';
 import '../widget/add_seed_list_dialog.dart';
-import '../service/lookup_service.dart';
 import '../service/seedling_list_service.dart';
 
 class SeedForForestForm extends StatefulWidget {
@@ -262,13 +261,6 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
                                               ),
                                               const SizedBox(height: 4),
                                               Text(
-                                                'Type: ${detail.speciesType}',
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey.shade700,
-                                                ),
-                                              ),
-                                              Text(
                                                 'Count: ${detail.speciesCount}',
                                                 style: TextStyle(
                                                   fontSize: 12,
@@ -355,11 +347,9 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
                             maxLines: 3,
                             decoration: _modernInputDecoration(
                               label: 'Remarks',
-                              hint: 'Enter remarks',
+                              hint: 'Enter remarks (optional)',
                               icon: Icons.notes_outlined,
                             ),
-                            validator: (v) =>
-                                v == null || v.trim().isEmpty ? 'Required' : null,
                           ),
                         ],
                       ),
@@ -441,17 +431,13 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
   }
 
   Future<void> _openAddSeedListDialog() async {
-    final results = await Future.wait([
-      _seedlingListService.getSeedlingOptions(),
-      LookupService.getSpeciesTypeOptions(),
-    ]);
+    final seedInventory = await _seedlingListService.getSeedlingOptions();
     if (!mounted) return;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AddSeedListDialog(
-        seedInventory: results[0],
-        speciesTypeInventory: results[1],
+        seedInventory: seedInventory,
         onAdd: (detail) {
           Navigator.pop(dialogContext);
           if (!mounted) return;
@@ -530,9 +516,6 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
       await _supabase.from('seed_donation_data').insert(dataRows);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Seed donation saved successfully.')),
-      );
 
       widget.onSave(
         SeedForForestEntry(
@@ -544,7 +527,6 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
           remarks: _remarksController.text.trim(),
         ),
       );
-      Navigator.pop(context);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
