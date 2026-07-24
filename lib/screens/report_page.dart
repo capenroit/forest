@@ -189,6 +189,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         mapData = await _attachFloraFaunaSpeciesRows(mapData);
       } else if (tableName == 'tree_survival_monitoring') {
         mapData = await _attachTreeSurvivalSpeciesRows(mapData);
+      } else if (tableName == 'seed_donation') {
+        mapData = await _attachSeedDonationSpeciesRows(mapData);
       }
 
       final filteredData = await compute(
@@ -396,6 +398,84 @@ class _ReportsScreenState extends State<ReportsScreen> {
         'number_of_trees': seedRow['seedling_count'],
         'quarter_label': quarterLabel,
       });
+    }
+
+    return flattened;
+  }
+
+  /// Expands each seed_donation row into one row per species captured in
+  /// seed_donation_data, joined via
+  /// seed_donation.id == seed_donation_data.seed_donation_id, with the
+  /// species name resolved via seedling_list.seq_id == seed_id.
+  Future<List<Map<String, dynamic>>> _attachSeedDonationSpeciesRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final donationIds = rows
+        .map((row) => _parseNullableInt(row['id']))
+        .whereType<int>()
+        .toList();
+
+    if (donationIds.isEmpty) return rows;
+
+    final Map<int, List<Map<String, dynamic>>> dataRowsByDonationId = {};
+    final Map<int, String> seedNameById = {};
+
+    try {
+      final dataRows = await Supabase.instance.client
+          .from('seed_donation_data')
+          .select('seed_donation_id, seed_id, seed_count')
+          .inFilter('seed_donation_id', donationIds);
+
+      final parsedDataRows = (dataRows as List).cast<Map<String, dynamic>>();
+      for (final row in parsedDataRows) {
+        final donationId = _parseNullableInt(row['seed_donation_id']);
+        if (donationId == null) continue;
+        dataRowsByDonationId.putIfAbsent(donationId, () => []).add(row);
+      }
+
+      final seedIds = parsedDataRows
+          .map((row) => _parseNullableInt(row['seed_id']))
+          .whereType<int>()
+          .toSet()
+          .toList();
+
+      if (seedIds.isNotEmpty) {
+        final seedRows = await Supabase.instance.client
+            .from('seedling_list')
+            .select('seq_id, seedling_name')
+            .inFilter('seq_id', seedIds);
+        for (final row in (seedRows as List).cast<Map<String, dynamic>>()) {
+          final id = _parseNullableInt(row['seq_id']);
+          if (id != null) {
+            seedNameById[id] = (row['seedling_name'] ?? '').toString();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error fetching seed_donation_data rows: $e');
+      return rows;
+    }
+
+    final flattened = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final donationId = _parseNullableInt(row['id']);
+      final dataRows =
+          donationId != null ? dataRowsByDonationId[donationId] : null;
+
+      if (dataRows == null || dataRows.isEmpty) {
+        // No matching seed_donation_data rows for this donation — omit it.
+        continue;
+      }
+
+      for (final dataRow in dataRows) {
+        final seedId = _parseNullableInt(dataRow['seed_id']);
+        flattened.add({
+          ...row,
+          'seed_species_name':
+              seedId != null ? (seedNameById[seedId] ?? 'Unspecified') : 'Unspecified',
+          'seed_count': dataRow['seed_count'],
+        });
+      }
     }
 
     return flattened;
@@ -661,6 +741,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 'date';
       case 'seedling_transaction':
         return 'created_at';
+      case 'seed_donation':
+        return 'donated_date';
       default:
         return 'planting_date';
     }
@@ -1162,6 +1244,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return _isSeedlingRequestSelected
             ? 'Seedling Request Report'
             : 'Seedling Inventory Report';
+      case 'seed_donation':
+        return 'Seed for a Forest Report';
       default:
         return 'Tree Growing Report';
     }
@@ -1177,6 +1261,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 'activity_id';
       case 'seedling_transaction':
         return _isSeedlingRequestSelected ? 'no' : 'sort_order';
+      case 'seed_donation':
+        return 'id';
       default:
         return 'seq_id';
     }
@@ -1221,6 +1307,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 'date',
               ]
             : ['no', 'species', ..._seedlingNurseryColumns, 'available'];
+      case 'seed_donation':
+        return [
+          'id',
+          'donor_name',
+          'seed_species_name',
+          'seed_count',
+          'status',
+          'donated_date',
+        ];
       default:
         return [
           'seq_id',
@@ -1268,6 +1363,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
       'release_by': 'Release By',
       'release_to': 'Release To',
       'nursery': 'Nursery',
+      'donor_name': 'Donor Name',
+      'seed_species_name': 'Species Name',
+      'seed_count': 'Quantity',
+      'status': 'Status',
+      'donated_date': 'Date',
     };
     return nameMap[columnName] ?? columnName.replaceAll('_', ' ').toUpperCase();
   }
@@ -1287,7 +1387,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'species_type':
       case 'species_name':
       case 'species':
+      case 'seed_species_name':
         return 0.14;
+      case 'donor_name':
+        return 0.16;
+      case 'status':
+        return 0.12;
       case 'available':
         return 0.12;
       case 'release_by':
@@ -1311,6 +1416,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'date':
       case 'planting_date':
       case 'survey_date':
+      case 'donated_date':
         return 0.14;
       default:
         return 0.10;
@@ -1345,14 +1451,22 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final endIndex = min(startIndex + _rowsPerPage, sortedData.length);
     final paginatedData = sortedData.sublist(startIndex, endIndex);
 
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
+    // This widget already sits inside a horizontally-scrolling ancestor
+    // (see the Scrollbar/SingleChildScrollView pair around its call site),
+    // so incoming layout constraints are unbounded here — MediaQuery is
+    // used instead of LayoutBuilder to get the real available width.
+    final screenWidth = MediaQuery.of(context).size.width;
+    final tableWidth =
+        kIsWeb && screenWidth > 1200 ? screenWidth : 1200.0;
+
+    return SizedBox(
+      width: tableWidth,
       child: Table(
         columnWidths: Map.fromIterable(
           List.generate(columnsToShow.length, (i) => i),
           value: (index) {
             final ratio = _getColumnRatio(columnsToShow[index]);
-            return FixedColumnWidth(ratio * 1200);
+            return FixedColumnWidth(ratio * tableWidth);
           },
         ),
         border: TableBorder.all(color: Colors.grey.shade300, width: 1),
@@ -1390,7 +1504,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 );
               }).toList(),
             );
-          }).toList(),
+          }),
         ],
       ),
     );
