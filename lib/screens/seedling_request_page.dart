@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data_entry/seedling_request_form.dart';
+import '../widget/add_seedling_request_detail_dialog.dart';
 
 class _SeedlingRequestItem {
   final String transactionId;
@@ -244,11 +245,10 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
               ),
               onSelected: (value) => _onActivityMenuSelected(group, value),
               itemBuilder: (context) => [
-                if (group.items.length == 1)
-                  const PopupMenuItem<String>(
-                    value: 'edit',
-                    child: Text('Edit'),
-                  ),
+                const PopupMenuItem<String>(
+                  value: 'edit',
+                  child: Text('Edit'),
+                ),
                 const PopupMenuItem<String>(
                   value: 'remove',
                   child: Text('Remove'),
@@ -469,8 +469,8 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
     _SeedlingRequestGroup group,
     String action,
   ) async {
-    if (action == 'edit' && group.items.length == 1) {
-      await _openDataEntryDialog(item: group.items.first);
+    if (action == 'edit') {
+      await _openDataEntryDialog(group: group);
       return;
     }
 
@@ -684,20 +684,26 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
     return '$year-$month-$day';
   }
 
-  Future<void> _openDataEntryDialog({_SeedlingRequestItem? item}) async {
+  Future<void> _openDataEntryDialog({_SeedlingRequestGroup? group}) async {
     try {
       if (!mounted) return;
+      final firstItem = group?.items.first;
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => SeedlingRequestForm(
-          initialTransactionId:
-              item == null ? null : int.tryParse(item.transactionId),
-          initialSeedId: item?.seedId,
-          initialNurseryId: item?.nurseryId,
-          initialSeedlingCount: item?.quantity,
-          initialDate: item?.createdAt,
-          initialReleaseBy: item?.releaseBy,
-          initialReleaseTo: item?.releaseTo,
+          initialRequestId: firstItem?.requestId,
+          initialNurseryId: firstItem?.nurseryId,
+          initialDetails: group?.items
+              .where((item) => item.seedId != null)
+              .map((item) => SeedlingRequestDetail(
+                    seedId: item.seedId!,
+                    speciesName: item.species,
+                    quantity: item.quantity,
+                  ))
+              .toList(),
+          initialDate: group?.createdAt,
+          initialReleaseBy: group?.releaseBy,
+          initialReleaseTo: group?.releaseTo,
           onSave: () {
             _loadRequests();
           },

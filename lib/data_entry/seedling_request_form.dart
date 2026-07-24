@@ -7,10 +7,9 @@ import '../widget/add_seedling_request_detail_dialog.dart';
 
 class SeedlingRequestForm extends StatefulWidget {
   final VoidCallback? onSave;
-  final int? initialTransactionId;
-  final int? initialSeedId;
+  final int? initialRequestId;
   final int? initialNurseryId;
-  final int? initialSeedlingCount;
+  final List<SeedlingRequestDetail>? initialDetails;
   final DateTime? initialDate;
   final String? initialReleaseBy;
   final String? initialReleaseTo;
@@ -18,10 +17,9 @@ class SeedlingRequestForm extends StatefulWidget {
   const SeedlingRequestForm({
     super.key,
     this.onSave,
-    this.initialTransactionId,
-    this.initialSeedId,
+    this.initialRequestId,
     this.initialNurseryId,
-    this.initialSeedlingCount,
+    this.initialDetails,
     this.initialDate,
     this.initialReleaseBy,
     this.initialReleaseTo,
@@ -49,8 +47,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
   // State flags
   bool _isLoading = true;
   bool _isSaving = false;
-
-  bool get _isEditing => widget.initialTransactionId != null;
 
   @override
   void initState() {
@@ -105,24 +101,10 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
       }
     }
 
-    if (widget.initialSeedId != null && widget.initialSeedlingCount != null) {
-      _SeedlingOption? seedling;
-      for (final option in _seedlingOptions) {
-        if (option.id == widget.initialSeedId) {
-          seedling = option;
-          break;
-        }
-      }
-
-      if (seedling != null) {
-        _details.add(
-          SeedlingRequestDetail(
-            seedId: seedling.id,
-            speciesName: seedling.name,
-            quantity: widget.initialSeedlingCount!,
-          ),
-        );
-      }
+    if (widget.initialDetails != null) {
+      _details
+        ..clear()
+        ..addAll(widget.initialDetails!);
     }
 
     setState(() {});
@@ -202,7 +184,8 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
       final supabase = Supabase.instance.client;
       final transactionRows = await supabase
           .from('seedling_transaction')
-          .select('seed_id, transaction_type_id, nursery_id, seedling_count')
+          .select(
+              'seed_id, transaction_type_id, nursery_id, seedling_count, transaction_id')
           .limit(5000);
 
       final typeRows = await supabase
@@ -222,8 +205,15 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
         final nurseryId = (row['nursery_id'] as num?)?.toInt();
         final typeId = (row['transaction_type_id'] as num?)?.toInt();
         final quantity = (row['seedling_count'] as num?)?.toInt() ?? 0;
+        final rowRequestId = (row['transaction_id'] as num?)?.toInt();
 
         if (seedId == null || nurseryId == null) continue;
+        // Exclude this request's own existing rows so re-saving the same
+        // (or adjusted) quantities isn't blocked by its own prior release.
+        if (widget.initialRequestId != null &&
+            rowRequestId == widget.initialRequestId) {
+          continue;
+        }
 
         final type = typeById[typeId] ?? '';
         final signedQuantity = type == 'release' ? -quantity : quantity;
@@ -359,44 +349,36 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
           DateTime.tryParse(_dateController.text.trim()) ?? DateTime.now();
       final supabase = Supabase.instance.client;
 
-      if (widget.initialTransactionId == null) {
-        final nextTransactionId = await _resolveNextTransactionId(supabase);
+      final requestId = widget.initialRequestId ??
+          await _resolveNextTransactionId(supabase);
 
-        final rows = _details
-            .map((detail) => {
-                  'seed_id': detail.seedId,
-                  'user_id': authUserId,
-                  'transaction_type_id': transactionTypeId,
-                  'seedling_count': detail.quantity,
-                  'details': 'Release transaction',
-                  'created_at': parsedDate.toIso8601String(),
-                  'nursery_id': selectedNursery.id,
-                  'release_by': releaseBy,
-                  'release_to': releaseTo,
-                  'transaction_id': nextTransactionId,
-                })
-            .toList();
+      final rows = _details
+          .map((detail) => {
+                'seed_id': detail.seedId,
+                'user_id': authUserId,
+                'transaction_type_id': transactionTypeId,
+                'seedling_count': detail.quantity,
+                'details': 'Release transaction',
+                'created_at': parsedDate.toIso8601String(),
+                'nursery_id': selectedNursery.id,
+                'release_by': releaseBy,
+                'release_to': releaseTo,
+                'transaction_id': requestId,
+              })
+          .toList();
 
-        await supabase.from('seedling_transaction').insert(rows);
-      } else {
-        final detail = _details.first;
-        final payload = {
-          'seed_id': detail.seedId,
-          'user_id': authUserId,
-          'transaction_type_id': transactionTypeId,
-          'seedling_count': detail.quantity,
-          'details': 'Release transaction',
-          'created_at': parsedDate.toIso8601String(),
-          'nursery_id': selectedNursery.id,
-          'release_by': releaseBy,
-          'release_to': releaseTo,
-        };
-
+      if (widget.initialRequestId != null) {
+        // Editing: replace every row that belonged to this request rather
+        // than updating by row id, since species/quantities may have been
+        // added, removed, or changed — same pattern used for other
+        // multi-row records (e.g. Flora and Fauna Survey).
         await supabase
             .from('seedling_transaction')
-            .update(payload)
-            .eq('id', widget.initialTransactionId!);
+            .delete()
+            .eq('transaction_id', requestId);
       }
+
+      await supabase.from('seedling_transaction').insert(rows);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -588,12 +570,10 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
                                 child: Text(option.name),
                               ))
                           .toList(),
-                      onChanged: _isEditing
-                          ? null
-                          : (value) => setState(() {
-                                _selectedNursery = value;
-                                _details.clear();
-                              }),
+                      onChanged: (value) => setState(() {
+                        _selectedNursery = value;
+                        _details.clear();
+                      }),
                       decoration: InputDecoration(
                         hintText: 'Choose nursery',
                         filled: true,
@@ -703,42 +683,39 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
                                             ],
                                           ),
                                         ),
-                                        if (!_isEditing)
-                                          IconButton(
-                                            onPressed: () {
-                                              setState(() {
-                                                _details.removeAt(index);
-                                              });
-                                            },
-                                            icon: const Icon(Icons.delete_outline),
-                                            tooltip: 'Remove seedling',
-                                          ),
+                                        IconButton(
+                                          onPressed: () {
+                                            setState(() {
+                                              _details.removeAt(index);
+                                            });
+                                          },
+                                          icon: const Icon(Icons.delete_outline),
+                                          tooltip: 'Remove seedling',
+                                        ),
                                       ],
                                     ),
                                   ),
                                 );
                               }),
                             ),
-                          if (!_isEditing) ...[
-                            const SizedBox(height: 12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: OutlinedButton.icon(
-                                onPressed: _selectedNursery == null
-                                    ? null
-                                    : _openAddDetailDialog,
-                                icon: const Icon(Icons.playlist_add),
-                                label: const Text('Add Seedling'),
-                                style: OutlinedButton.styleFrom(
-                                  minimumSize: const Size(double.infinity, 44),
-                                  side: const BorderSide(color: Color(0xFF1B8B5E)),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _selectedNursery == null
+                                  ? null
+                                  : _openAddDetailDialog,
+                              icon: const Icon(Icons.playlist_add),
+                              label: const Text('Add Seedling'),
+                              style: OutlinedButton.styleFrom(
+                                minimumSize: const Size(double.infinity, 44),
+                                side: const BorderSide(color: Color(0xFF1B8B5E)),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
                               ),
                             ),
-                          ],
+                          ),
                         ],
                       ),
                     ),

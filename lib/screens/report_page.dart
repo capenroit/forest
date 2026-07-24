@@ -1023,17 +1023,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Text(
-                              _getReportTitle(),
-                              style: const TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            if (_reportData.isNotEmpty)
+                        if (_reportData.isNotEmpty)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
                               ElevatedButton.icon(
                                 onPressed: _exportToExcel,
                                 icon: const Icon(Icons.download),
@@ -1043,8 +1036,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                   foregroundColor: Colors.white,
                                 ),
                               ),
-                          ],
-                        ),
+                            ],
+                          ),
                         const SizedBox(height: 8),
                         Expanded(
                           child: _isLoading

@@ -209,7 +209,7 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     );
                   }),
-                  _buildNavItem(Icons.inventory, "Seedling Inventory", () {
+                  _buildNavItem(Icons.inventory, "Available Seedling Inventory", () {
                     Navigator.pop(context);
                     Navigator.push(
                       context,

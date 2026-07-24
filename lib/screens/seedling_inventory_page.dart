@@ -178,7 +178,7 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
             Icon(Icons.inventory_2_rounded, color: Colors.white, size: 32),
             SizedBox(width: 12),
             Text(
-              'Seedling Inventory',
+              'Available Seedling Inventory',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
