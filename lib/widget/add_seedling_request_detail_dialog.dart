@@ -5,15 +5,11 @@ import '../service/lookup_service.dart';
 class SeedlingRequestDetail {
   final int seedId;
   final String speciesName;
-  final int speciesTypeId;
-  final String speciesTypeName;
   final int quantity;
 
   const SeedlingRequestDetail({
     required this.seedId,
     required this.speciesName,
-    required this.speciesTypeId,
-    required this.speciesTypeName,
     required this.quantity,
   });
 }
@@ -23,13 +19,11 @@ class AddSeedlingRequestDetailDialog extends StatefulWidget {
     super.key,
     required this.seedlingOptions,
     required this.availableQuantityBySeedId,
-    required this.plantableSpeciesType,
     required this.onAdd,
   });
 
   final List<LookupOption> seedlingOptions;
   final Map<int, int> availableQuantityBySeedId;
-  final LookupOption plantableSpeciesType;
   final ValueChanged<SeedlingRequestDetail> onAdd;
 
   @override
@@ -87,8 +81,6 @@ class _AddSeedlingRequestDetailDialogState
       SeedlingRequestDetail(
         seedId: seedling.id,
         speciesName: seedling.name,
-        speciesTypeId: widget.plantableSpeciesType.id,
-        speciesTypeName: widget.plantableSpeciesType.name,
         quantity: int.parse(_quantityController.text.trim()),
       ),
     );

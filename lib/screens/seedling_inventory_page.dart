@@ -87,12 +87,14 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
 
   bool _isLoading = true;
   String? _errorMessage;
+  int _propagatedCount = 0;
 
   @override
   void initState() {
     super.initState();
     _loadAvailableSeedlings();
     _loadNurseryFilterOptions();
+    _loadPropagatedCount();
   }
 
   @override
@@ -149,6 +151,20 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
     }
   }
 
+  Future<void> _loadPropagatedCount() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('seed_donation')
+          .select('id')
+          .eq('status', 'PROPAGATED');
+
+      if (!mounted) return;
+      setState(() => _propagatedCount = (rows as List<dynamic>).length);
+    } catch (_) {
+      // Badge just won't show if this fails.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -173,7 +189,10 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         ),
       ),
       body: RefreshIndicator(
-        onRefresh: () => _loadAvailableSeedlings(showLoader: false),
+        onRefresh: () async {
+          await _loadAvailableSeedlings(showLoader: false);
+          await _loadPropagatedCount();
+        },
         child: Column(
           children: [
             const Padding(
@@ -280,27 +299,56 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         padding: EdgeInsets.only(
           bottom: !_isLoading && _errorMessage == null ? 64 : 0,
         ),
-        child: Container(
-          decoration: BoxDecoration(
-            color: const Color.fromARGB(255, 200, 230, 220),
-            borderRadius: BorderRadius.circular(50),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.15),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Container(
+              decoration: BoxDecoration(
+                color: const Color.fromARGB(255, 200, 230, 220),
+                borderRadius: BorderRadius.circular(50),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: IconButton(
-            onPressed: _openDataEntryDialog,
-            icon: const Icon(
-              Icons.add,
-              color: Color.fromARGB(255, 31, 103, 78),
+              child: IconButton(
+                onPressed: _openDataEntryDialog,
+                icon: const Icon(
+                  Icons.list_alt_rounded,
+                  color: Color.fromARGB(255, 31, 103, 78),
+                ),
+                iconSize: 35,
+                tooltip: 'View propagated seeds',
+              ),
             ),
-            iconSize: 35,
-            tooltip: 'Add inventory entry',
-          ),
+            if (_propagatedCount > 0)
+              Positioned(
+                top: -2,
+                right: -2,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+                  decoration: BoxDecoration(
+                    color: Colors.red,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    _propagatedCount > 99 ? '99+' : '$_propagatedCount',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      height: 1,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -882,15 +930,6 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
               ))
           .toList();
 
-      final speciesTypeRows =
-          await supabase.from('species_type').select('seq_id, name');
-      final speciesTypeIdByName = <String, int>{
-        for (final row
-            in (speciesTypeRows as List<dynamic>).cast<Map<String, dynamic>>())
-          (row['name'] ?? '').toString().trim().toLowerCase():
-              (row['seq_id'] as num).toInt(),
-      };
-
       final transactionTypeRows = await supabase
           .from('seedling_transaction_type')
           .select('id, transaction_type');
@@ -916,9 +955,9 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
       await _showPropagatedDonationsDialog(
         rows: rows,
         nurseryOptions: nurseryOptions,
-        speciesTypeIdByName: speciesTypeIdByName,
         receiveTypeId: receiveTypeId,
       );
+      _loadPropagatedCount();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -944,7 +983,6 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
 
   Future<void> _convertDonationToInventory(
     _PropagatedRowState row,
-    Map<String, int> speciesTypeIdByName,
     int? receiveTypeId,
   ) async {
     final nursery = row.nursery;
@@ -976,8 +1014,6 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                 'Converted from Seed for a Forest donation #${row.donation.id}',
             'created_at': DateTime.now().toIso8601String(),
             'nursery_id': nursery.id,
-            'species_type_id':
-                speciesTypeIdByName[detail.speciesType.trim().toLowerCase()],
             'release_by': null,
             'release_to': null,
           };
@@ -1000,7 +1036,6 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
   Future<void> _showPropagatedDonationsDialog({
     required List<_PropagatedRowState> rows,
     required List<LookupOption> nurseryOptions,
-    required Map<String, int> speciesTypeIdByName,
     required int? receiveTypeId,
   }) async {
     final pageContext = context;
@@ -1354,18 +1389,22 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                                         ),
                                         const SizedBox(width: 8),
                                         SizedBox(
-                                          width: 40,
                                           height: 40,
                                           child: row.isConverting
                                               ? const Padding(
-                                                  padding: EdgeInsets.all(8),
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    strokeWidth: 2,
-                                                    color: Color(0xFF1B8B5E),
+                                                  padding: EdgeInsets.symmetric(
+                                                      horizontal: 8),
+                                                  child: SizedBox(
+                                                    width: 20,
+                                                    height: 20,
+                                                    child:
+                                                        CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: Color(0xFF1B8B5E),
+                                                    ),
                                                   ),
                                                 )
-                                              : IconButton(
+                                              : ElevatedButton.icon(
                                                   onPressed: canConvert
                                                       ? () async {
                                                           setDialogState(() =>
@@ -1374,13 +1413,13 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                                                           try {
                                                             await _convertDonationToInventory(
                                                               row,
-                                                              speciesTypeIdByName,
                                                               receiveTypeId,
                                                             );
                                                             setDialogState(() =>
                                                                 rows.remove(
                                                                     row));
                                                             _loadAvailableSeedlings();
+                                                            _loadPropagatedCount();
                                                             if (!pageContext.mounted) return;
                                                             ScaffoldMessenger.of(
                                                                     pageContext)
@@ -1393,6 +1432,11 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                                                                         0xFF1B8B5E),
                                                               ),
                                                             );
+                                                            if (rows.isEmpty) {
+                                                              Navigator.of(
+                                                                      dialogContext)
+                                                                  .pop();
+                                                            }
                                                           } catch (e) {
                                                             setDialogState(() =>
                                                                 row.isConverting =
@@ -1413,10 +1457,23 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                                                         }
                                                       : null,
                                                   icon: const Icon(
-                                                      Icons.check_circle_rounded),
-                                                  color: canConvert
-                                                      ? const Color(0xFF1B8B5E)
-                                                      : Colors.grey.shade400,
+                                                      Icons.save_rounded,
+                                                      size: 16),
+                                                  label: const Text('Save'),
+                                                  style: ElevatedButton.styleFrom(
+                                                    backgroundColor:
+                                                        const Color(0xFF1B8B5E),
+                                                    foregroundColor: Colors.white,
+                                                    disabledBackgroundColor:
+                                                        Colors.grey.shade300,
+                                                    padding:
+                                                        const EdgeInsets.symmetric(
+                                                            horizontal: 12),
+                                                    textStyle: const TextStyle(
+                                                        fontSize: 13,
+                                                        fontWeight:
+                                                            FontWeight.w600),
+                                                  ),
                                                 ),
                                         ),
                                       ],

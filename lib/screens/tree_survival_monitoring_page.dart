@@ -227,13 +227,41 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
           Positioned(
             top: -4,
             right: -10,
-            child: IconButton(
+            child: PopupMenuButton<String>(
               icon: const Icon(
                 Icons.more_vert_rounded,
                 color: Color(0xFF8A8DA3),
               ),
               tooltip: 'More',
-              onPressed: () {},
+              onSelected: (action) {
+                if (action == 'edit') {
+                  _openEditDialog(row);
+                } else if (action == 'remove') {
+                  _confirmAndRemove(row);
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'edit',
+                  child: Row(
+                    children: [
+                      Icon(Icons.edit_outlined, size: 18),
+                      SizedBox(width: 10),
+                      Text('Edit'),
+                    ],
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'remove',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                      SizedBox(width: 10),
+                      Text('Remove', style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -370,11 +398,13 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         };
       }).toList();
 
+      final mergedItems = _mergeRecordsByActivity(enrichedItems);
+
       if (!mounted) return;
       setState(() {
         _items
           ..clear()
-          ..addAll(enrichedItems);
+          ..addAll(mergedItems);
         _isLoading = false;
         _errorMessage = null;
       });
@@ -385,6 +415,44 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         _errorMessage = 'Failed to load records: $e';
       });
     }
+  }
+
+  /// Each row is one species now (seed_id links to tree_growing_data), so a
+  /// single monitoring submission produces several rows sharing the same
+  /// activity, quarter, date, and updated_at. Merge those back into one
+  /// card, summing the per-species survived counts.
+  List<Map<String, dynamic>> _mergeRecordsByActivity(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final merged = <String, Map<String, dynamic>>{};
+
+    for (final row in rows) {
+      final activityId = row['activity_id']?.toString() ?? '';
+      final quarter = row['quarter']?.toString() ?? '';
+      final date = row['date']?.toString() ?? '';
+      final updatedAt = row['updated_at']?.toString() ?? '';
+      final key = '$activityId|$quarter|$date|$updatedAt';
+
+      final survived = (row['number_tree_survived'] as num?)?.toInt() ??
+          (row['number_tree_sur'] as num?)?.toInt() ??
+          0;
+
+      final existing = merged[key];
+      if (existing == null) {
+        merged[key] = {
+          ...row,
+          'number_tree_survived': survived,
+          '_group_rows': [row],
+        };
+      } else {
+        final existingSurvived =
+            (existing['number_tree_survived'] as num?)?.toInt() ?? 0;
+        existing['number_tree_survived'] = existingSurvived + survived;
+        (existing['_group_rows'] as List<Map<String, dynamic>>).add(row);
+      }
+    }
+
+    return merged.values.toList();
   }
 
   String _formatDate(DateTime date) {
@@ -416,6 +484,79 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         ),
       ),
     );
+  }
+
+  Future<void> _openEditDialog(Map<String, dynamic> mergedRow) async {
+    final groupRows =
+        (mergedRow['_group_rows'] as List<Map<String, dynamic>>?) ??
+            [mergedRow];
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: MonitoringTreeSurvivalForm(
+          municipalities: const [],
+          barangays: const [],
+          initialRows: groupRows,
+          onSave: () {
+            Navigator.pop(dialogContext);
+            _loadRecentActivities(showLoader: false);
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmAndRemove(Map<String, dynamic> mergedRow) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove record'),
+        content: const Text(
+          'This will delete this monitoring record and all its species entries. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final groupRows =
+        (mergedRow['_group_rows'] as List<Map<String, dynamic>>?) ??
+            [mergedRow];
+    final ids = groupRows
+        .map((row) =>
+            (row['seq_id'] as num?)?.toInt() ?? (row['id'] as num?)?.toInt())
+        .whereType<int>()
+        .toList();
+
+    try {
+      await ApiService.deleteTreeSurvivalMonitoringRows(ids);
+      if (!mounted) return;
+      await _loadRecentActivities(showLoader: false);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove record: $e')),
+      );
+    }
   }
 }
 

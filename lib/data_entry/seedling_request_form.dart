@@ -10,7 +10,6 @@ class SeedlingRequestForm extends StatefulWidget {
   final int? initialTransactionId;
   final int? initialSeedId;
   final int? initialNurseryId;
-  final int? initialSpeciesTypeId;
   final int? initialSeedlingCount;
   final DateTime? initialDate;
   final String? initialReleaseBy;
@@ -22,7 +21,6 @@ class SeedlingRequestForm extends StatefulWidget {
     this.initialTransactionId,
     this.initialSeedId,
     this.initialNurseryId,
-    this.initialSpeciesTypeId,
     this.initialSeedlingCount,
     this.initialDate,
     this.initialReleaseBy,
@@ -42,7 +40,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
   List<_SeedlingOption> _seedlingOptions = [];
   List<LookupOption> _transactionTypeOptions = [];
   List<LookupOption> _nurseryOptions = [];
-  List<LookupOption> _speciesTypeOptions = [];
   Map<int, Map<int, int>> _availabilityBySeedAndNursery = {};
 
   // Selected values
@@ -86,7 +83,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
         _loadSeedlings(),
         _loadTransactionTypes(),
         _loadNurseries(),
-        _loadSpeciesTypes(),
         _loadAvailability(),
       ]);
       if (mounted) {
@@ -109,9 +105,7 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
       }
     }
 
-    if (widget.initialSeedId != null &&
-        widget.initialSpeciesTypeId != null &&
-        widget.initialSeedlingCount != null) {
+    if (widget.initialSeedId != null && widget.initialSeedlingCount != null) {
       _SeedlingOption? seedling;
       for (final option in _seedlingOptions) {
         if (option.id == widget.initialSeedId) {
@@ -119,21 +113,12 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
           break;
         }
       }
-      LookupOption? speciesType;
-      for (final option in _speciesTypeOptions) {
-        if (option.id == widget.initialSpeciesTypeId) {
-          speciesType = option;
-          break;
-        }
-      }
 
-      if (seedling != null && speciesType != null) {
+      if (seedling != null) {
         _details.add(
           SeedlingRequestDetail(
             seedId: seedling.id,
             speciesName: seedling.name,
-            speciesTypeId: speciesType.id,
-            speciesTypeName: speciesType.name,
             quantity: widget.initialSeedlingCount!,
           ),
         );
@@ -212,29 +197,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
     }
   }
 
-  Future<void> _loadSpeciesTypes() async {
-    try {
-      final supabase = Supabase.instance.client;
-      final response = await supabase
-          .from('species_type')
-          .select('seq_id, name');
-
-      final options = (response as List<dynamic>)
-          .map((row) => LookupOption(
-            id: (row['seq_id'] as num).toInt(),
-            name: (row['name'] as String).trim(),
-          ))
-          .toList();
-
-      if (!mounted) return;
-      setState(() {
-        _speciesTypeOptions = options;
-      });
-    } catch (e) {
-      // Error handled silently
-    }
-  }
-
   Future<void> _loadAvailability() async {
     try {
       final supabase = Supabase.instance.client;
@@ -297,25 +259,10 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
     }
   }
 
-  LookupOption? get _plantableSpeciesType {
-    for (final option in _speciesTypeOptions) {
-      if (option.name.trim().toLowerCase() == 'plantable') {
-        return option;
-      }
-    }
-    return null;
-  }
-
   Future<void> _openAddDetailDialog() async {
     final nurseryId = _selectedNursery?.id;
     if (nurseryId == null) {
       _showErrorSnackBar('Please select a nursery first.');
-      return;
-    }
-
-    final plantableSpeciesType = _plantableSpeciesType;
-    if (plantableSpeciesType == null) {
-      _showErrorSnackBar('"Plantable" species type is not configured.');
       return;
     }
 
@@ -346,7 +293,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
       builder: (dialogContext) => AddSeedlingRequestDetailDialog(
         seedlingOptions: options,
         availableQuantityBySeedId: availableQuantityBySeedId,
-        plantableSpeciesType: plantableSpeciesType,
         onAdd: (detail) {
           Navigator.pop(dialogContext);
           if (!mounted) return;
@@ -414,6 +360,8 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
       final supabase = Supabase.instance.client;
 
       if (widget.initialTransactionId == null) {
+        final nextTransactionId = await _resolveNextTransactionId(supabase);
+
         final rows = _details
             .map((detail) => {
                   'seed_id': detail.seedId,
@@ -423,9 +371,9 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
                   'details': 'Release transaction',
                   'created_at': parsedDate.toIso8601String(),
                   'nursery_id': selectedNursery.id,
-                  'species_type_id': detail.speciesTypeId,
                   'release_by': releaseBy,
                   'release_to': releaseTo,
+                  'transaction_id': nextTransactionId,
                 })
             .toList();
 
@@ -440,7 +388,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
           'details': 'Release transaction',
           'created_at': parsedDate.toIso8601String(),
           'nursery_id': selectedNursery.id,
-          'species_type_id': detail.speciesTypeId,
           'release_by': releaseBy,
           'release_to': releaseTo,
         };
@@ -478,6 +425,20 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
         backgroundColor: Colors.red,
       ),
     );
+  }
+
+  /// One transaction_id is shared by every detail row saved in this request
+  /// so the Seedling Request page can merge them back into a single card.
+  Future<int> _resolveNextTransactionId(SupabaseClient supabase) async {
+    final row = await supabase
+        .from('seedling_transaction')
+        .select('transaction_id')
+        .order('transaction_id', ascending: false)
+        .limit(1)
+        .maybeSingle();
+
+    final currentMax = (row?['transaction_id'] as num?)?.toInt() ?? 0;
+    return currentMax + 1;
   }
 
   int? _resolveReleaseTransactionTypeId() {
@@ -732,13 +693,6 @@ class _SeedlingRequestFormState extends State<SeedlingRequestForm> {
                                                 ),
                                               ),
                                               const SizedBox(height: 4),
-                                              Text(
-                                                'Type: ${detail.speciesTypeName}',
-                                                style: TextStyle(
-                                                  fontSize: 12,
-                                                  color: Colors.grey.shade700,
-                                                ),
-                                              ),
                                               Text(
                                                 'Quantity: ${detail.quantity}',
                                                 style: TextStyle(

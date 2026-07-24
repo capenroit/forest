@@ -44,7 +44,7 @@ class ReportsScreen extends StatefulWidget {
 }
 
 class _ReportsScreenState extends State<ReportsScreen> {
-  String _selectedProjectTypeName = 'all';
+  String _selectedProjectTypeName = 'Tree Growing';
   int? _selectedProjectTypeId;
   bool _isLoading = false;
   List<Map<String, dynamic>> _reportData = [];
@@ -53,6 +53,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   DateTimeRange? _selectedDateRange;
   late ScrollController _horizontalScrollController;
   bool _isLoadingReport = false;
+  List<String> _seedlingNurseryColumns = [];
 
   static const int _rowsPerPage = 50;
   int _currentPage = 0;
@@ -84,8 +85,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       final response = await Supabase.instance.client
           .from('project_type')
           .select('id, projectname')
-          .eq('dashboard_filter', true)
-          .order('id')
+          .order('id', ascending: true)
           .timeout(const Duration(seconds: 5));
 
       final typed =
@@ -95,9 +95,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
       setState(() {
         _projectTypes = typed;
         if (_selectedProjectTypeId == null && typed.isNotEmpty) {
-          _selectedProjectTypeId = _toInt(typed.first['id']);
+          final defaultMatch = typed.firstWhere(
+            (projectType) =>
+                (projectType['projectname'] ?? '').toString().toLowerCase() ==
+                'tree growing',
+            orElse: () => typed.first,
+          );
+          _selectedProjectTypeId = _toInt(defaultMatch['id']);
           _selectedProjectTypeName =
-              (typed.first['projectname'] ?? 'all').toString();
+              (defaultMatch['projectname'] ?? 'all').toString();
         }
       });
     } catch (_) {
@@ -111,6 +117,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value);
     return null;
+  }
+
+  String? get _dropdownProjectTypeValue {
+    final exists = _projectTypes.any((projectType) =>
+        (projectType['projectname'] ?? '').toString() ==
+        _selectedProjectTypeName);
+    return exists ? _selectedProjectTypeName : null;
   }
 
   Future<void> _loadReport() async {
@@ -128,13 +141,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     try {
       List<dynamic> data = [];
-      final tableName = _resolveTableNameForSelection(
-          _selectedProjectTypeName == 'all' ? null : _selectedProjectTypeName);
+      final tableName =
+          _resolveTableNameForSelection(_selectedProjectTypeName);
 
       final query = Supabase.instance.client.from(tableName).select('*');
-      final filteredQuery =
-          tableName == 'tree_growing' && _selectedProjectTypeId != null
-              ? query.eq('project_type_id', _selectedProjectTypeId!)
+      final filteredQuery = tableName == 'tree_growing' &&
+              _selectedProjectTypeId != null
+          ? query.eq('project_type_id', _selectedProjectTypeId!)
+          : tableName == 'seedling_transaction' && _isSeedlingRequestSelected
+              ? query.eq('transaction_type_id', 2)
               : query;
 
       final completer = Completer<List<dynamic>>();
@@ -170,6 +185,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       if (tableName == 'tree_growing') {
         mapData = await _attachTreeGrowingSpeciesRows(mapData);
+      } else if (tableName == 'flora_fauna_survey') {
+        mapData = await _attachFloraFaunaSpeciesRows(mapData);
+      } else if (tableName == 'tree_survival_monitoring') {
+        mapData = await _attachTreeSurvivalSpeciesRows(mapData);
       }
 
       final filteredData = await compute(
@@ -183,19 +202,26 @@ class _ReportsScreenState extends State<ReportsScreen> {
         },
       );
 
+      var finalData = filteredData;
+      if (tableName == 'seedling_transaction') {
+        finalData = _isSeedlingRequestSelected
+            ? await _buildSeedlingRequestRows(filteredData)
+            : await _buildSeedlingInventoryRows(filteredData);
+      }
+
       if (mounted) {
         setState(() {
-          _reportData = filteredData;
+          _reportData = finalData;
           _isLoading = false;
         });
       }
 
-      if (filteredData.length <= 5000) {
+      if (finalData.length <= 5000) {
         try {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString(
             'report_${_selectedProjectTypeId ?? 'all'}_cache',
-            jsonEncode(filteredData),
+            jsonEncode(finalData),
           );
         } catch (e) {
           debugPrint('⚠️ Error caching data: $e');
@@ -258,6 +284,330 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return flattened;
   }
 
+  /// Expands each flora_fauna_survey row into one row per species captured
+  /// in flora_fauna_survey_data, joined via
+  /// flora_fauna_survey.id == flora_fauna_survey_data.flora_fauna_id.
+  Future<List<Map<String, dynamic>>> _attachFloraFaunaSpeciesRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final surveyIds = rows
+        .map((row) => _parseNullableInt(row['id']))
+        .whereType<int>()
+        .toList();
+
+    if (surveyIds.isEmpty) return rows;
+
+    Map<int, List<Map<String, dynamic>>> speciesRowsBySurvey;
+    try {
+      speciesRowsBySurvey =
+          await ApiService.getFloraFaunaSurveyDataByFloraFaunaIds(surveyIds);
+    } catch (e) {
+      debugPrint('⚠️ Error fetching flora_fauna_survey_data rows: $e');
+      return rows;
+    }
+
+    final flattened = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final surveyId = _parseNullableInt(row['id']);
+      final speciesRows =
+          surveyId != null ? speciesRowsBySurvey[surveyId] : null;
+
+      if (speciesRows == null || speciesRows.isEmpty) {
+        // No matching flora_fauna_survey_data rows for this survey — omit it.
+        continue;
+      }
+
+      for (final speciesRow in speciesRows) {
+        flattened.add({
+          ...row,
+          'species_type': speciesRow['species_type'],
+          'species_name': speciesRow['name'],
+        });
+      }
+    }
+
+    return flattened;
+  }
+
+  /// Each tree_survival_monitoring row already represents exactly one
+  /// species (seed_id == tree_growing_data.id), so this just attaches the
+  /// species name/count and the tree_growing activity's name/location —
+  /// no fan-out needed.
+  Future<List<Map<String, dynamic>>> _attachTreeSurvivalSpeciesRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final activityIds = rows
+        .map((row) => _parseNullableInt(row['activity_id']))
+        .whereType<int>()
+        .toSet()
+        .toList();
+
+    if (activityIds.isEmpty) return [];
+
+    Map<int, Map<String, dynamic>> treeGrowingBySeqId;
+    Map<int, Map<String, dynamic>> seedRowById;
+    try {
+      final treeGrowingRows = await Supabase.instance.client
+          .from('tree_growing')
+          .select('seq_id, activity_name, municipality, barangay, area_cover')
+          .inFilter('seq_id', activityIds);
+
+      treeGrowingBySeqId = {
+        for (final item in (treeGrowingRows as List))
+          if (_parseNullableInt((item as Map)['seq_id']) != null)
+            _parseNullableInt(item['seq_id'])!: Map<String, dynamic>.from(item),
+      };
+
+      final seedRowsByActivity =
+          await ApiService.getTreeGrowingDataByTreeGrowingIds(activityIds);
+      seedRowById = {
+        for (final seedRows in seedRowsByActivity.values)
+          for (final seedRow in seedRows)
+            if (_parseNullableInt(seedRow['id']) != null)
+              _parseNullableInt(seedRow['id'])!: seedRow,
+      };
+    } catch (e) {
+      debugPrint('⚠️ Error fetching tree survival join data: $e');
+      return [];
+    }
+
+    final flattened = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final activityId = _parseNullableInt(row['activity_id']);
+      final seedId = _parseNullableInt(row['seed_id']);
+      final seedRow = seedId != null ? seedRowById[seedId] : null;
+
+      if (activityId == null || seedRow == null) {
+        // No matching tree_growing_data row for this seed_id — omit it.
+        continue;
+      }
+
+      final treeGrowingRow = treeGrowingBySeqId[activityId];
+      final quarter = row['quarter'];
+      final quarterLabel = quarter == null ? '' : 'Q$quarter';
+
+      flattened.add({
+        ...row,
+        'activity_name': treeGrowingRow?['activity_name'] ?? '',
+        'municipality': treeGrowingRow?['municipality'] ?? '',
+        'barangay': treeGrowingRow?['barangay'] ?? '',
+        'area_cover': treeGrowingRow?['area_cover'],
+        'tree_species': seedRow['seed_name'],
+        'number_of_trees': seedRow['seedling_count'],
+        'quarter_label': quarterLabel,
+      });
+    }
+
+    return flattened;
+  }
+
+  /// Builds the Seedling Request view: one row per seedling_transaction
+  /// record (already filtered to transaction_type_id == 2 == release),
+  /// joined against seedling_list and seedling_nursery for display names.
+  Future<List<Map<String, dynamic>>> _buildSeedlingRequestRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final seedIds = rows
+        .map((row) => _parseNullableInt(row['seed_id']))
+        .whereType<int>()
+        .toSet()
+        .toList();
+    final nurseryIds = rows
+        .map((row) => _parseNullableInt(row['nursery_id']))
+        .whereType<int>()
+        .toSet()
+        .toList();
+
+    final Map<int, String> seedNameById = {};
+    final Map<int, String> nurseryNameById = {};
+
+    try {
+      if (seedIds.isNotEmpty) {
+        final seedRows = await Supabase.instance.client
+            .from('seedling_list')
+            .select('seq_id, seedling_name')
+            .inFilter('seq_id', seedIds);
+        for (final row in (seedRows as List).cast<Map<String, dynamic>>()) {
+          final id = _parseNullableInt(row['seq_id']);
+          if (id != null) {
+            seedNameById[id] = (row['seedling_name'] ?? '').toString();
+          }
+        }
+      }
+
+      if (nurseryIds.isNotEmpty) {
+        final nurseryRows = await Supabase.instance.client
+            .from('seedling_nursery')
+            .select('seq_id, name')
+            .inFilter('seq_id', nurseryIds);
+        for (final row
+            in (nurseryRows as List).cast<Map<String, dynamic>>()) {
+          final id = _parseNullableInt(row['seq_id']);
+          if (id != null) {
+            nurseryNameById[id] = (row['name'] ?? '').toString();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error fetching seedling request join data: $e');
+    }
+
+    return rows.map((row) {
+      final seedId = _parseNullableInt(row['seed_id']);
+      final nurseryId = _parseNullableInt(row['nursery_id']);
+      final createdAt = (row['created_at'] ?? '').toString();
+
+      return <String, dynamic>{
+        'no': _parseNullableInt(row['transaction_id']),
+        'release_by': (row['release_by'] ?? '').toString(),
+        'release_to': (row['release_to'] ?? '').toString(),
+        'species': seedId != null
+            ? (seedNameById[seedId] ?? 'Unspecified')
+            : 'Unspecified',
+        'quantity': row['seedling_count'],
+        'nursery': nurseryId != null
+            ? (nurseryNameById[nurseryId] ?? 'Unspecified')
+            : 'Unspecified',
+        'date': createdAt.isEmpty ? '' : createdAt.split('T').first,
+      };
+    }).toList();
+  }
+
+  /// Builds the Seedling Inventory pivot: one row per species/nursery
+  /// showing the quantity received (transaction_type_id == 1) at that
+  /// nursery, plus a final "Available" row per species equal to
+  /// (sum of transaction_type_id == 1) - (sum of transaction_type_id == 2)
+  /// across all nurseries.
+  Future<List<Map<String, dynamic>>> _buildSeedlingInventoryRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final seedIds = rows
+        .map((row) => _parseNullableInt(row['seed_id']))
+        .whereType<int>()
+        .toSet()
+        .toList();
+    final nurseryIds = rows
+        .map((row) => _parseNullableInt(row['nursery_id']))
+        .whereType<int>()
+        .toSet()
+        .toList();
+
+    final Map<int, String> seedNameById = {};
+    final Map<int, String> nurseryNameById = {};
+
+    try {
+      if (seedIds.isNotEmpty) {
+        final seedRows = await Supabase.instance.client
+            .from('seedling_list')
+            .select('seq_id, seedling_name')
+            .inFilter('seq_id', seedIds);
+        for (final row in (seedRows as List).cast<Map<String, dynamic>>()) {
+          final id = _parseNullableInt(row['seq_id']);
+          if (id != null) {
+            seedNameById[id] = (row['seedling_name'] ?? '').toString();
+          }
+        }
+      }
+
+      if (nurseryIds.isNotEmpty) {
+        final nurseryRows = await Supabase.instance.client
+            .from('seedling_nursery')
+            .select('seq_id, name')
+            .inFilter('seq_id', nurseryIds);
+        for (final row
+            in (nurseryRows as List).cast<Map<String, dynamic>>()) {
+          final id = _parseNullableInt(row['seq_id']);
+          if (id != null) {
+            nurseryNameById[id] = (row['name'] ?? '').toString();
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('⚠️ Error fetching seedling inventory lookups: $e');
+    }
+
+    // Per seed: net (type 1 - type 2) quantity per nursery, plus the
+    // overall net available across all rows, including rows with no
+    // nursery assigned.
+    final Map<int, Map<int, int>> netBySeedAndNursery = {};
+    final Map<int, int> availableBySeed = {};
+
+    for (final row in rows) {
+      final seedId = _parseNullableInt(row['seed_id']);
+      if (seedId == null) continue;
+
+      final nurseryId = _parseNullableInt(row['nursery_id']);
+      final typeId = _parseNullableInt(row['transaction_type_id']);
+      final quantity = _parseNullableInt(row['seedling_count']) ?? 0;
+
+      if (typeId != 1 && typeId != 2) continue;
+      final signedQuantity = typeId == 1 ? quantity : -quantity;
+
+      availableBySeed[seedId] =
+          (availableBySeed[seedId] ?? 0) + signedQuantity;
+      if (nurseryId != null) {
+        final nurseryMap = netBySeedAndNursery.putIfAbsent(seedId, () => {});
+        nurseryMap[nurseryId] = (nurseryMap[nurseryId] ?? 0) + signedQuantity;
+      }
+    }
+
+    final nurseryColumnIds = netBySeedAndNursery.values
+        .expand((nurseryMap) => nurseryMap.keys)
+        .toSet()
+        .toList()
+      ..sort();
+    final nurseryColumns = nurseryColumnIds
+        .map((id) => nurseryNameById[id] ?? 'Unspecified')
+        .toList();
+
+    _seedlingNurseryColumns = nurseryColumns;
+
+    final sortedSeedIds = seedIds.toList()
+      ..sort((a, b) => (seedNameById[a] ?? '')
+          .toLowerCase()
+          .compareTo((seedNameById[b] ?? '').toLowerCase()));
+
+    final pivoted = <Map<String, dynamic>>[];
+    var sortOrder = 0;
+    for (var i = 0; i < sortedSeedIds.length; i++) {
+      final seedId = sortedSeedIds[i];
+      final speciesName = seedNameById[seedId] ?? 'Unspecified';
+      final no = i + 1;
+      final nurseryMap = netBySeedAndNursery[seedId] ?? {};
+
+      for (final nurseryId in nurseryColumnIds) {
+        final quantity = nurseryMap[nurseryId];
+        if (quantity == null) continue;
+
+        final rowMap = <String, dynamic>{
+          'sort_order': sortOrder++,
+          'no': no,
+          'species': speciesName,
+          'available': '',
+        };
+        for (final column in nurseryColumns) {
+          rowMap[column] = '';
+        }
+        rowMap[nurseryNameById[nurseryId] ?? 'Unspecified'] =
+            quantity.toString();
+        pivoted.add(rowMap);
+      }
+
+      final rowMap = <String, dynamic>{
+        'sort_order': sortOrder++,
+        'no': no,
+        'species': speciesName,
+        'available': (availableBySeed[seedId] ?? 0).toString(),
+      };
+      for (final column in nurseryColumns) {
+        rowMap[column] = '';
+      }
+      pivoted.add(rowMap);
+    }
+
+    return pivoted;
+  }
+
   static Future<List<Map<String, dynamic>>> _filterDataInBackground(
     Map<String, dynamic> params,
   ) async {
@@ -293,8 +643,27 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }).toList();
   }
 
+  String get _currentTableName =>
+      _resolveTableNameForSelection(_selectedProjectTypeName);
+
+  /// Both "Seedling Inventory" and "Seedling Request" read from the same
+  /// seedling_transaction table but render completely different views, so
+  /// this disambiguates which one is selected wherever _currentTableName
+  /// alone (== 'seedling_transaction') can't tell them apart.
+  bool get _isSeedlingRequestSelected =>
+      _selectedProjectTypeName.trim().toLowerCase() == 'seedling request';
+
   String _getDateFieldName() {
-    return 'planting_date';
+    switch (_currentTableName) {
+      case 'flora_fauna_survey':
+        return 'survey_date';
+      case 'tree_survival_monitoring':
+        return 'date';
+      case 'seedling_transaction':
+        return 'created_at';
+      default:
+        return 'planting_date';
+    }
   }
 
   String _resolveTableNameForSelection(String? projectName) {
@@ -311,6 +680,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 'flora_fauna_survey';
       case 'seedling inventory':
       case 'seedling_transaction':
+      case 'seedling request':
         return 'seedling_transaction';
       case 'seed for a forest':
       case 'seed_donation':
@@ -454,53 +824,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       DropdownButton<String>(
-                                        value: _selectedProjectTypeName,
+                                        value: _dropdownProjectTypeValue,
                                         isExpanded: true,
                                         items: [
-                                          const DropdownMenuItem(
-                                            value: 'all',
-                                            child: Text('All'),
-                                          ),
-                                          const DropdownMenuItem(
-                                            value: 'Tree Growing',
-                                            child: Text('Tree Growing'),
-                                          ),
-                                          const DropdownMenuItem(
-                                            value: 'Monitoring Tree Survival',
-                                            child: Text(
-                                                'Monitoring Tree Survival'),
-                                          ),
-                                          const DropdownMenuItem(
-                                            value: 'Flora and Fauna Survey',
-                                            child:
-                                                Text('Flora and Fauna Survey'),
-                                          ),
-                                          const DropdownMenuItem(
-                                            value: 'Seedling Inventory',
-                                            child: Text('Seedling Inventory'),
-                                          ),
-                                          const DropdownMenuItem(
-                                            value: 'Seed for a Forest',
-                                            child: Text('Seed for a Forest'),
-                                          ),
+                                          ..._projectTypes.map((projectType) {
+                                            final name = (projectType[
+                                                        'projectname'] ??
+                                                    '')
+                                                .toString();
+                                            return DropdownMenuItem(
+                                              value: name,
+                                              child: Text(name),
+                                            );
+                                          }),
                                         ],
                                         onChanged: (value) {
                                           if (value == null) return;
                                           setState(() {
                                             _selectedProjectTypeName = value;
-                                            _selectedProjectTypeId = value ==
-                                                    'all'
-                                                ? null
-                                                : _toInt(
-                                                    _projectTypes.firstWhere(
-                                                    (projectType) =>
-                                                        (projectType[
-                                                                    'projectname'] ??
-                                                                '')
-                                                            .toString() ==
-                                                        value,
-                                                    orElse: () => {},
-                                                  )['id']);
+                                            _selectedProjectTypeId = _toInt(
+                                                _projectTypes.firstWhere(
+                                              (projectType) =>
+                                                  (projectType[
+                                                              'projectname'] ??
+                                                          '')
+                                                      .toString() ==
+                                                  value,
+                                              orElse: () => {},
+                                            )['id']);
                                           });
                                           _loadReport();
                                         },
@@ -802,20 +1153,86 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   String _getReportTitle() {
-    return 'Tree Growing Report';
+    switch (_currentTableName) {
+      case 'flora_fauna_survey':
+        return 'Flora and Fauna Survey Report';
+      case 'tree_survival_monitoring':
+        return 'Monitoring Tree Survival Report';
+      case 'seedling_transaction':
+        return _isSeedlingRequestSelected
+            ? 'Seedling Request Report'
+            : 'Seedling Inventory Report';
+      default:
+        return 'Tree Growing Report';
+    }
+  }
+
+  /// The column holding each row's display number ("No.") — the primary
+  /// key column differs per source table.
+  String _getNoColumnKey() {
+    switch (_currentTableName) {
+      case 'flora_fauna_survey':
+        return 'id';
+      case 'tree_survival_monitoring':
+        return 'activity_id';
+      case 'seedling_transaction':
+        return _isSeedlingRequestSelected ? 'no' : 'sort_order';
+      default:
+        return 'seq_id';
+    }
   }
 
   List<String> _getColumnsToDisplay() {
-    return [
-      'seq_id',
-      'activity_name',
-      'tree_species',
-      'number_of_trees',
-      'area_cover',
-      'municipality',
-      'barangay',
-      'planting_date',
-    ];
+    switch (_currentTableName) {
+      case 'flora_fauna_survey':
+        return [
+          'id',
+          'activity_name',
+          'species_type',
+          'species_name',
+          'area',
+          'municipality',
+          'barangay',
+          'observer',
+          'survey_date',
+        ];
+      case 'tree_survival_monitoring':
+        return [
+          'activity_id',
+          'activity_name',
+          'tree_species',
+          'number_of_trees',
+          'number_tree_survived',
+          'quarter_label',
+          'area_cover',
+          'municipality',
+          'barangay',
+          'date',
+        ];
+      case 'seedling_transaction':
+        return _isSeedlingRequestSelected
+            ? [
+                'no',
+                'release_by',
+                'release_to',
+                'species',
+                'quantity',
+                'nursery',
+                'date',
+              ]
+            : ['no', 'species', ..._seedlingNurseryColumns, 'available'];
+      default:
+        return [
+          'seq_id',
+          'activity_name',
+          'tree_species',
+          'number_of_trees',
+          'area_cover',
+          'municipality',
+          'barangay',
+          'planting_date',
+        ];
+    }
   }
 
   List<int> _getColumnFlexValues() {
@@ -823,50 +1240,97 @@ class _ReportsScreenState extends State<ReportsScreen> {
   }
 
   String _getColumnDisplayName(String columnName) {
+    if (_seedlingNurseryColumns.contains(columnName)) return columnName;
+
     final nameMap = {
       'seq_id': 'No.',
+      'id': 'No.',
+      'activity_id': 'No.',
+      'no': 'No.',
       'activity_name': 'Activity Name',
       'tree_species': 'Species',
+      'species_type': 'Type',
+      'species_name': 'Species',
+      'species': 'Species',
       'number_of_trees': 'Number of Trees',
+      'number_tree_survived': 'Survived',
+      'quarter_label': 'Quarter',
       'area_cover': 'Area Cover',
+      'area': 'Area Cover',
       'municipality': 'Municipality',
       'barangay': 'Barangay',
+      'observer': 'Observer',
       'planting_date': 'Date',
+      'survey_date': 'Date',
       'date': 'Date',
       'quantity': 'Quantity',
+      'available': 'Available',
+      'release_by': 'Release By',
+      'release_to': 'Release To',
+      'nursery': 'Nursery',
     };
     return nameMap[columnName] ?? columnName.replaceAll('_', ' ').toUpperCase();
   }
 
   double _getColumnRatio(String columnName) {
+    if (_seedlingNurseryColumns.contains(columnName)) return 0.12;
+
     switch (columnName) {
       case 'seq_id':
+      case 'id':
+      case 'activity_id':
+      case 'no':
         return 0.06;
       case 'activity_name':
         return 0.16;
       case 'tree_species':
-        return 0.16;
-      case 'number_of_trees':
+      case 'species_type':
+      case 'species_name':
+      case 'species':
+        return 0.14;
+      case 'available':
         return 0.12;
+      case 'release_by':
+      case 'release_to':
+      case 'nursery':
+        return 0.14;
+      case 'number_of_trees':
+      case 'number_tree_survived':
+        return 0.12;
+      case 'quarter_label':
+        return 0.08;
       case 'area_cover':
+      case 'area':
         return 0.12;
       case 'municipality':
         return 0.14;
       case 'barangay':
         return 0.14;
+      case 'observer':
+        return 0.12;
       case 'date':
       case 'planting_date':
+      case 'survey_date':
         return 0.14;
       default:
         return 0.10;
     }
   }
 
+  int? _parseNullableInt(dynamic value) {
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+
+  int _toComparableInt(dynamic value) => _parseNullableInt(value) ?? 0;
+
   List<Map<String, dynamic>> _sortBySeqId(List<Map<String, dynamic>> data) {
+    final noColumnKey = _getNoColumnKey();
     final sorted = List<Map<String, dynamic>>.from(data);
     sorted.sort((a, b) {
-      final seqA = (a['seq_id'] as num?)?.toInt() ?? 0;
-      final seqB = (b['seq_id'] as num?)?.toInt() ?? 0;
+      final seqA = _toComparableInt(a[noColumnKey]);
+      final seqB = _toComparableInt(b[noColumnKey]);
       return seqA.compareTo(seqB);
     });
     return sorted;

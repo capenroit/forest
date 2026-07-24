@@ -3,7 +3,16 @@ import 'package:flutter/material.dart';
 
 /// Returns 'save', 'share', or null (cancelled) via [Navigator.pop].
 class ExportOptionsDialog extends StatelessWidget {
-  const ExportOptionsDialog({super.key});
+  final String title;
+  final String headerSubtitle;
+  final String fileTypeLabel;
+
+  const ExportOptionsDialog({
+    super.key,
+    this.title = 'Export Report',
+    this.headerSubtitle = 'Choose how you\'d like to export the file',
+    this.fileTypeLabel = 'Excel file',
+  });
 
   static const Color _brandColor = Color(0xFF1B8B5E);
 
@@ -32,23 +41,23 @@ class ExportOptionsDialog extends StatelessWidget {
               ),
               padding: const EdgeInsets.all(18),
               child: Row(
-                children: const [
-                  Icon(Icons.ios_share, color: Colors.white, size: 24),
-                  SizedBox(width: 12),
+                children: [
+                  const Icon(Icons.ios_share, color: Colors.white, size: 24),
+                  const SizedBox(width: 12),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Export Report',
-                        style: TextStyle(
+                        title,
+                        style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w700,
                           color: Colors.white,
                         ),
                       ),
                       Text(
-                        'Choose how you\'d like to export the file',
-                        style: TextStyle(
+                        headerSubtitle,
+                        style: const TextStyle(
                           fontSize: 11,
                           color: Colors.white70,
                         ),
@@ -71,8 +80,8 @@ class ExportOptionsDialog extends StatelessWidget {
                     fillColor: Colors.green.shade50,
                     title: 'Save to Device',
                     subtitle: kIsWeb
-                        ? 'Download the Excel file'
-                        : 'Save the Excel file locally',
+                        ? 'Download the $fileTypeLabel'
+                        : 'Save the $fileTypeLabel locally',
                     onTap: () => Navigator.of(context).pop('save'),
                   ),
                   if (!kIsWeb) ...[

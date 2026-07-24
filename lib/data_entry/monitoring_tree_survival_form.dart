@@ -12,12 +12,17 @@ class MonitoringTreeSurvivalForm extends StatefulWidget {
   final VoidCallback onSave;
   final VoidCallback onCancel;
 
+  /// The raw tree_survival_monitoring rows (one per species) belonging to
+  /// the record being edited. Null/empty means "create a new record".
+  final List<Map<String, dynamic>>? initialRows;
+
   const MonitoringTreeSurvivalForm({
     super.key,
     required this.municipalities,
     required this.barangays,
     required this.onSave,
     required this.onCancel,
+    this.initialRows,
   });
 
   @override
@@ -32,22 +37,55 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
   late TextEditingController _detailsController;
   late TextEditingController _dateController;
   int? _selectedQuarter;
+  Set<int> _usedQuarters = {};
 
   List<TreePlanting> _treeGrowingOptions = [];
   TreePlanting? _selectedTreeGrowing;
   List<_SurvivalSeedRow> _survivalRows = [];
 
+  // The activity actually used for saving/species lookup. In edit mode this
+  // is captured from the record being edited (activity_name + seq_id) up
+  // front, independent of whether a matching TreePlanting is ever found in
+  // _treeGrowingOptions — so the Activity Name field shows correctly right
+  // away instead of waiting on that list to load and match.
+  int? _activitySeqId;
+  String _activityName = '';
+  String _municipality = '';
+  String _barangay = '';
+
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isLoadingSeedRows = false;
 
+  bool get _isEditing =>
+      widget.initialRows != null && widget.initialRows!.isNotEmpty;
+
   @override
   void initState() {
     super.initState();
-    _detailsController = TextEditingController();
-    _dateController = TextEditingController(
-      text: DateTime.now().toIso8601String().split('T').first,
+    final editingRows = widget.initialRows;
+    _detailsController = TextEditingController(
+      text: _isEditing ? (editingRows!.first['details'] ?? '').toString() : '',
     );
+    _dateController = TextEditingController(
+      text: _isEditing
+          ? (editingRows!.first['date']?.toString() ??
+              DateTime.now().toIso8601String().split('T').first)
+          : DateTime.now().toIso8601String().split('T').first,
+    );
+    _selectedQuarter =
+        _isEditing ? (editingRows!.first['quarter'] as num?)?.toInt() : null;
+
+    if (_isEditing) {
+      _activitySeqId = (editingRows!.first['activity_id'] as num?)?.toInt();
+      _activityName = (editingRows.first['activity_name'] ?? '').toString();
+      _municipality = (editingRows.first['municipality'] ?? '').toString();
+      _barangay = (editingRows.first['barangay'] ?? '').toString();
+      if (_activitySeqId != null) {
+        _loadSeedRowsForSelectedActivity(_activitySeqId!);
+      }
+    }
+
     _loadTreeGrowingOptions();
   }
 
@@ -72,6 +110,17 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
       setState(() {
         _treeGrowingOptions = options;
       });
+
+      if (_isEditing && _activitySeqId != null) {
+        // Only used to enrich the (locked) display — species/date/quarter
+        // were already loaded from the edited record in initState.
+        for (final option in options) {
+          if (option.seqId == _activitySeqId) {
+            setState(() => _selectedTreeGrowing = option);
+            break;
+          }
+        }
+      }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -94,20 +143,32 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
     }
   }
 
-  Future<void> _loadSeedRowsForSelectedActivity(TreePlanting activity) async {
-    final seqId = activity.seqId;
-
+  Future<void> _loadSeedRowsForSelectedActivity(int? seqId) async {
     if (seqId == null || seqId <= 0) {
       setState(() {
         for (final row in _survivalRows) {
           row.surviveController.dispose();
         }
         _survivalRows = [];
+        _usedQuarters = {};
       });
       return;
     }
 
     setState(() => _isLoadingSeedRows = true);
+
+    // Existing per-species survived counts, keyed by seed_id, when editing.
+    final existingSurvivedBySeedId = <int, int>{};
+    if (_isEditing) {
+      for (final row in widget.initialRows!) {
+        final seedId = (row['seed_id'] as num?)?.toInt();
+        final survived = (row['number_tree_survived'] as num?)?.toInt() ??
+            (row['number_tree_sur'] as num?)?.toInt();
+        if (seedId != null && survived != null) {
+          existingSurvivedBySeedId[seedId] = survived;
+        }
+      }
+    }
 
     try {
       final grouped = await ApiService.getTreeGrowingDataByTreeGrowingIds([
@@ -115,15 +176,36 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
       ]);
       final rows = grouped[seqId] ?? const [];
 
-      final nextRows = rows.map((row) {
-        final seedName = (row['seed_name'] ?? '').toString().trim();
-        final planted = (row['seedling_count'] as num?)?.toInt() ?? 0;
-        return _SurvivalSeedRow(
-          species: seedName.isEmpty ? 'N/A' : seedName,
-          plantedCount: planted,
-          surviveController: TextEditingController(),
-        );
-      }).toList();
+      final nextRows = rows
+          .map((row) {
+            final seedId = (row['id'] as num?)?.toInt();
+            if (seedId == null) return null;
+            final seedName = (row['seed_name'] ?? '').toString().trim();
+            final planted = (row['seedling_count'] as num?)?.toInt() ?? 0;
+            final controller = TextEditingController(
+              text: existingSurvivedBySeedId[seedId]?.toString() ?? '',
+            );
+            return _SurvivalSeedRow(
+              seedId: seedId,
+              species: seedName.isEmpty ? 'N/A' : seedName,
+              plantedCount: planted,
+              surviveController: controller,
+            );
+          })
+          .whereType<_SurvivalSeedRow>()
+          .toList();
+
+      Set<int> usedQuarters = {};
+      try {
+        usedQuarters = await ApiService.getUsedQuartersForActivity(seqId);
+      } catch (_) {
+        // Non-fatal; leave quarters unlocked if this lookup fails.
+      }
+      if (_isEditing) {
+        final ownQuarter =
+            (widget.initialRows!.first['quarter'] as num?)?.toInt();
+        if (ownQuarter != null) usedQuarters.remove(ownQuarter);
+      }
 
       if (!mounted) {
         for (final row in nextRows) {
@@ -137,6 +219,7 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
           row.surviveController.dispose();
         }
         _survivalRows = nextRows;
+        _usedQuarters = usedQuarters;
       });
     } finally {
       if (mounted) {
@@ -148,12 +231,11 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
   Future<void> _handleSave() async {
     if (_isSaving) return;
 
-    final selectedTreeGrowing = _selectedTreeGrowing;
-    final activitySeqId = selectedTreeGrowing?.seqId;
-    final activityName = selectedTreeGrowing?.activityName?.trim() ?? '';
+    final activitySeqId = _activitySeqId;
+    final activityName = _activityName.trim();
     final details = _detailsController.text.trim();
-    final municipality = selectedTreeGrowing?.municipality.trim() ?? '';
-    final barangay = selectedTreeGrowing?.barangay.trim() ?? '';
+    final municipality = _municipality.trim();
+    final barangay = _barangay.trim();
     final quarter = _selectedQuarter;
 
     if (_survivalRows.isEmpty) {
@@ -168,7 +250,7 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
 
     bool hasInvalidSurviveValue = false;
     bool hasSurviveGreaterThanPlanted = false;
-    int totalSurvive = 0;
+    final speciesSurvival = <({int seedId, int numberTreeSurvived})>[];
 
     for (final row in _survivalRows) {
       final raw = row.surviveController.text.trim();
@@ -181,7 +263,7 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
         hasSurviveGreaterThanPlanted = true;
         break;
       }
-      totalSurvive += survive;
+      speciesSurvival.add((seedId: row.seedId, numberTreeSurvived: survive));
     }
 
     if (hasSurviveGreaterThanPlanted) {
@@ -194,8 +276,7 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
       return;
     }
 
-    if (selectedTreeGrowing == null ||
-      activitySeqId == null ||
+    if (activitySeqId == null ||
       activitySeqId <= 0 ||
       quarter == null ||
         activityName.isEmpty ||
@@ -230,10 +311,19 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
     setState(() => _isSaving = true);
 
     try {
-      await ApiService.saveTreeSurvivalMonitoring(
+      if (_isEditing) {
+        final oldIds = widget.initialRows!
+            .map((row) =>
+                (row['seq_id'] as num?)?.toInt() ?? (row['id'] as num?)?.toInt())
+            .whereType<int>()
+            .toList();
+        await ApiService.deleteTreeSurvivalMonitoringRows(oldIds);
+      }
+
+      await ApiService.saveTreeSurvivalMonitoringRows(
         userId: authUserId,
         activityId: activitySeqId,
-        numberTreeSurvived: totalSurvive,
+        speciesSurvival: speciesSurvival,
         quarter: quarter,
         details: details.isEmpty ? null : details,
         date: parsedDate,
@@ -355,7 +445,7 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
       );
     }
 
-    if (_selectedTreeGrowing == null) {
+    if (_activitySeqId == null) {
       return Text(
         'Select an activity to load species.',
         style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
@@ -442,14 +532,14 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
             ),
             padding: const EdgeInsets.all(18),
             child: Row(
-              children: const [
-                Icon(Icons.monitor_heart_rounded,
+              children: [
+                const Icon(Icons.monitor_heart_rounded,
                     color: Colors.white, size: 24),
-                SizedBox(width: 12),
+                const SizedBox(width: 12),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Monitoring of Tree Survival',
                       style: TextStyle(
                         fontSize: 16,
@@ -458,8 +548,11 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
                       ),
                     ),
                     Text(
-                      'Add monitoring record',
-                      style: TextStyle(fontSize: 11, color: Colors.white70),
+                      _isEditing
+                          ? 'Edit monitoring record'
+                          : 'Add monitoring record',
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.white70),
                     ),
                   ],
                 ),
@@ -474,54 +567,89 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
                 children: [
                   _fieldLabel('Activity Name *'),
                   const SizedBox(height: 6),
-                  DropdownButtonFormField<TreePlanting>(
-                    value: _selectedTreeGrowing,
-                    onChanged: _isLoading || _treeGrowingOptions.isEmpty
-                        ? null
-                        : (TreePlanting? newValue) async {
-                            setState(() => _selectedTreeGrowing = newValue);
-                            if (newValue != null) {
-                              await _loadSeedRowsForSelectedActivity(newValue);
-                            } else {
+                  if (_isEditing)
+                    TextFormField(
+                      readOnly: true,
+                      enabled: false,
+                      initialValue: _activityName.isEmpty
+                          ? 'N/A'
+                          : '$_activityName | ${_municipality.isEmpty ? 'N/A' : _municipality} | ${_barangay.isEmpty ? 'N/A' : _barangay}',
+                      style: const TextStyle(color: Color(0xFF25273B)),
+                      decoration: _inputDecoration(
+                        hint: 'Select tree growing activity',
+                        icon: Icons.edit_rounded,
+                        suffixIcon: Icon(Icons.lock_outline,
+                            color: Colors.grey.shade500, size: 18),
+                      ).copyWith(
+                        fillColor: Colors.grey.shade100,
+                        disabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(8),
+                          borderSide:
+                              BorderSide(color: Colors.grey.shade300, width: 2),
+                        ),
+                      ),
+                    )
+                  else
+                    DropdownButtonFormField<TreePlanting>(
+                      value: _selectedTreeGrowing,
+                      onChanged: _isLoading || _treeGrowingOptions.isEmpty
+                          ? null
+                          : (TreePlanting? newValue) async {
                               setState(() {
-                                for (final row in _survivalRows) {
-                                  row.surviveController.dispose();
-                                }
-                                _survivalRows = [];
+                                _selectedTreeGrowing = newValue;
+                                _activitySeqId = newValue?.seqId;
+                                _activityName =
+                                    newValue?.activityName?.trim() ?? '';
+                                _municipality =
+                                    newValue?.municipality.trim() ?? '';
+                                _barangay = newValue?.barangay.trim() ?? '';
+                                _selectedQuarter = null;
+                                _usedQuarters = {};
                               });
-                            }
-                          },
-                    decoration: _inputDecoration(
-                      hint: 'Select tree growing activity',
-                      icon: Icons.edit_rounded,
-                    ),
-                    isExpanded: true,
-                    dropdownColor: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    items: _isLoading
-                        ? [
-                            const DropdownMenuItem<TreePlanting>(
-                              value: null,
-                              child: Text('Loading...'),
-                            ),
-                          ]
-                        : _treeGrowingOptions.isEmpty
-                            ? [
-                                const DropdownMenuItem<TreePlanting>(
-                                  value: null,
-                                  child: Text('No tree growing activities found'),
-                                ),
-                              ]
-                            : _treeGrowingOptions.map((option) {
-                                return DropdownMenuItem<TreePlanting>(
-                                  value: option,
-                                  child: Text(
-                                    _buildTreeGrowingLabel(option),
-                                    overflow: TextOverflow.ellipsis,
+                              if (newValue != null) {
+                                await _loadSeedRowsForSelectedActivity(
+                                    newValue.seqId);
+                              } else {
+                                setState(() {
+                                  for (final row in _survivalRows) {
+                                    row.surviveController.dispose();
+                                  }
+                                  _survivalRows = [];
+                                });
+                              }
+                            },
+                      decoration: _inputDecoration(
+                        hint: 'Select tree growing activity',
+                        icon: Icons.edit_rounded,
+                      ),
+                      isExpanded: true,
+                      dropdownColor: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                      items: _isLoading
+                          ? [
+                              const DropdownMenuItem<TreePlanting>(
+                                value: null,
+                                child: Text('Loading...'),
+                              ),
+                            ]
+                          : _treeGrowingOptions.isEmpty
+                              ? [
+                                  const DropdownMenuItem<TreePlanting>(
+                                    value: null,
+                                    child:
+                                        Text('No tree growing activities found'),
                                   ),
-                                );
-                              }).toList(),
-                  ),
+                                ]
+                              : _treeGrowingOptions.map((option) {
+                                  return DropdownMenuItem<TreePlanting>(
+                                    value: option,
+                                    child: Text(
+                                      _buildTreeGrowingLabel(option),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  );
+                                }).toList(),
+                    ),
                   const SizedBox(height: 14),
                   _fieldLabel('Survival Data'),
                   const SizedBox(height: 6),
@@ -579,10 +707,21 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
                     borderRadius: BorderRadius.circular(8),
                     items: _quarterOptions
                         .map(
-                          (quarter) => DropdownMenuItem<int>(
-                            value: quarter,
-                            child: Text('Quarter $quarter'),
-                          ),
+                          (quarter) {
+                            final isUsed = _usedQuarters.contains(quarter);
+                            return DropdownMenuItem<int>(
+                              value: quarter,
+                              enabled: !isUsed,
+                              child: Text(
+                                isUsed
+                                    ? 'Quarter $quarter (already recorded)'
+                                    : 'Quarter $quarter',
+                                style: isUsed
+                                    ? TextStyle(color: Colors.grey.shade400)
+                                    : null,
+                              ),
+                            );
+                          },
                         )
                         .toList(),
                   ),
@@ -661,14 +800,14 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
                               color: Colors.white,
                             ),
                           )
-                        : const Row(
+                        : Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.save_rounded, size: 20),
-                              SizedBox(width: 8),
+                              const Icon(Icons.save_rounded, size: 20),
+                              const SizedBox(width: 8),
                               Text(
-                                'Save Record',
-                                style: TextStyle(
+                                _isEditing ? 'Update Record' : 'Save Record',
+                                style: const TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 15,
                                 ),
@@ -687,11 +826,13 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
 }
 
 class _SurvivalSeedRow {
+  final int seedId;
   final String species;
   final int plantedCount;
   final TextEditingController surviveController;
 
   _SurvivalSeedRow({
+    required this.seedId,
     required this.species,
     required this.plantedCount,
     required this.surviveController,

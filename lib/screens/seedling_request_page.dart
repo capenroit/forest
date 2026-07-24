@@ -5,25 +5,25 @@ import '../data_entry/seedling_request_form.dart';
 
 class _SeedlingRequestItem {
   final String transactionId;
+  final int? requestId;
   final int? seedId;
   final String species;
   final int quantity;
   final DateTime createdAt;
   final int? nurseryId;
   final String nursery;
-  final int? speciesTypeId;
   final String? releaseBy;
   final String? releaseTo;
 
   const _SeedlingRequestItem({
     required this.transactionId,
+    required this.requestId,
     required this.seedId,
     required this.species,
     required this.quantity,
     required this.createdAt,
     required this.nurseryId,
     required this.nursery,
-    required this.speciesTypeId,
     required this.releaseBy,
     required this.releaseTo,
   });
@@ -561,7 +561,7 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
       var query = supabase
           .from('seedling_transaction')
           .select(
-              'id, seed_id, nursery_id, seedling_count, species_type_id, release_by, release_to, created_at, transaction_type_id');
+              'id, transaction_id, seed_id, nursery_id, seedling_count, release_by, release_to, created_at, transaction_type_id');
 
       if (releaseTypeId != null) {
         query = query.eq('transaction_type_id', releaseTypeId);
@@ -627,13 +627,13 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
 
         return _SeedlingRequestItem(
           transactionId: (row['id'] ?? '').toString(),
+          requestId: (row['transaction_id'] as num?)?.toInt(),
           seedId: seedId,
           species: seedNameById[seedId] ?? 'Unspecified',
           quantity: (row['seedling_count'] as num?)?.toInt() ?? 0,
           createdAt: createdAt,
           nurseryId: nurseryId,
           nursery: nurseryNameById[nurseryId] ?? 'Unspecified',
-          speciesTypeId: (row['species_type_id'] as num?)?.toInt(),
           releaseBy: (row['release_by'] ?? '').toString(),
           releaseTo: (row['release_to'] ?? '').toString(),
         );
@@ -641,8 +641,9 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
 
       final Map<String, List<_SeedlingRequestItem>> grouped = {};
       for (final item in loadedItems) {
-        final key =
-            '${item.createdAt.toIso8601String()}|${item.releaseTo}|${item.releaseBy}|${item.nurseryId}';
+        final key = item.requestId != null
+            ? 'txn:${item.requestId}'
+            : '${item.createdAt.toIso8601String()}|${item.releaseTo}|${item.releaseBy}|${item.nurseryId}';
         grouped.putIfAbsent(key, () => []).add(item);
       }
 
@@ -693,7 +694,6 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
               item == null ? null : int.tryParse(item.transactionId),
           initialSeedId: item?.seedId,
           initialNurseryId: item?.nurseryId,
-          initialSpeciesTypeId: item?.speciesTypeId,
           initialSeedlingCount: item?.quantity,
           initialDate: item?.createdAt,
           initialReleaseBy: item?.releaseBy,

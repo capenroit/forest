@@ -1,14 +1,24 @@
 import 'dart:convert' show jsonDecode, jsonEncode;
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:latlong2/latlong.dart' as ll;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../widget/export_options_dialog.dart';
 import '../widget/polygon_calculator.dart';
+import '../widget/web_helper.dart' as web_helper;
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -34,10 +44,16 @@ class _DashboardPageState extends State<DashboardPage>
   bool _isCachedMarkers = false;
   int _mapTapVersion = 0;
   bool _hasExpandedCluster = false;
+  final GlobalKey _mapCaptureKey = GlobalKey();
+  bool _isCapturingMap = false;
 
   List<Map<String, dynamic>> _allPhotoUrlRows = [];
   List<Map<String, dynamic>> _allTreeGrowingRows = [];
   Set<int> _treeGrowingIdsWithSpeciesData = {};
+
+  List<Map<String, dynamic>> _allLocationRows = [];
+  List<Map<String, dynamic>> _allFloraFaunaRows = [];
+  Set<int> _floraFaunaIdsWithSpeciesData = {};
 
   List<Map<String, dynamic>> _projectTypes = [];
   int? _selectedProjectTypeId;
@@ -233,9 +249,30 @@ class _DashboardPageState extends State<DashboardPage>
           .timeout(const Duration(seconds: 5));
 
       final idsWithSpeciesData = treeGrowingDataResponse
-          .map((row) => (row as Map)['tree_growing_id'])
-          .whereType<num>()
-          .map((id) => id.toInt())
+          .map((row) => _toInt((row as Map)['tree_growing_id']))
+          .whereType<int>()
+          .toSet();
+
+      final locationResponse = await Supabase.instance.client
+          .from('location')
+          .select('id, activity_id, activity_type_id, latitude, longitude')
+          .eq('isDeleted', 0)
+          .timeout(const Duration(seconds: 5));
+
+      final floraFaunaResponse = await Supabase.instance.client
+          .from('flora_fauna_survey')
+          .select('*')
+          .eq('is_deleted', 0)
+          .timeout(const Duration(seconds: 5));
+
+      final floraFaunaDataResponse = await Supabase.instance.client
+          .from('flora_fauna_survey_data')
+          .select('flora_fauna_id')
+          .timeout(const Duration(seconds: 5));
+
+      final floraFaunaIdsWithSpeciesData = floraFaunaDataResponse
+          .map((row) => _toInt((row as Map)['flora_fauna_id']))
+          .whereType<int>()
           .toSet();
 
       final prefs = await SharedPreferences.getInstance();
@@ -245,6 +282,13 @@ class _DashboardPageState extends State<DashboardPage>
         'tree_growing_data_ids_json',
         jsonEncode(idsWithSpeciesData.toList()),
       );
+      await prefs.setString('location_json', jsonEncode(locationResponse));
+      await prefs.setString(
+          'flora_fauna_survey_json', jsonEncode(floraFaunaResponse));
+      await prefs.setString(
+        'flora_fauna_survey_data_ids_json',
+        jsonEncode(floraFaunaIdsWithSpeciesData.toList()),
+      );
       await prefs.setString('markers_cache_date', DateTime.now().toIso8601String());
 
       final typedPhotoRows = photoUrlResponse
@@ -253,15 +297,33 @@ class _DashboardPageState extends State<DashboardPage>
       final typedTreeRows = treeGrowingResponse
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
+      final typedLocationRows = locationResponse
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
+      final typedFloraFaunaRows = floraFaunaResponse
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
 
       _treeGrowingIdsWithSpeciesData = idsWithSpeciesData;
-      final markers = _buildMarkersFromData(typedPhotoRows, typedTreeRows);
-      final polygons = _buildPolygonsFromData(typedPhotoRows, typedTreeRows);
+      _floraFaunaIdsWithSpeciesData = floraFaunaIdsWithSpeciesData;
+
+      final markers = [
+        ..._buildMarkersFromData(typedPhotoRows, typedTreeRows),
+        ..._buildFloraFaunaMarkersFromData(
+            typedLocationRows, typedFloraFaunaRows),
+      ];
+      final polygons = [
+        ..._buildPolygonsFromData(typedPhotoRows, typedTreeRows),
+        ..._buildFloraFaunaPolygonsFromData(
+            typedLocationRows, typedFloraFaunaRows),
+      ];
 
       if (!mounted) return;
       setState(() {
         _allPhotoUrlRows = typedPhotoRows;
         _allTreeGrowingRows = typedTreeRows;
+        _allLocationRows = typedLocationRows;
+        _allFloraFaunaRows = typedFloraFaunaRows;
         _markers = markers;
         _polygons = polygons;
         _isLoadingMarkers = false;
@@ -297,13 +359,40 @@ class _DashboardPageState extends State<DashboardPage>
               .toSet()
           : {};
 
-      final markers = _buildMarkersFromData(photoUrlResponse, treeGrowingResponse);
-      final polygons = _buildPolygonsFromData(photoUrlResponse, treeGrowingResponse);
+      final locationJson = prefs.getString('location_json');
+      final floraFaunaJson = prefs.getString('flora_fauna_survey_json');
+      final locationResponse = locationJson != null
+          ? List<Map<String, dynamic>>.from(jsonDecode(locationJson) as List)
+          : <Map<String, dynamic>>[];
+      final floraFaunaResponse = floraFaunaJson != null
+          ? List<Map<String, dynamic>>.from(
+              jsonDecode(floraFaunaJson) as List)
+          : <Map<String, dynamic>>[];
+
+      final floraFaunaDataIdsJson =
+          prefs.getString('flora_fauna_survey_data_ids_json');
+      _floraFaunaIdsWithSpeciesData = floraFaunaDataIdsJson != null
+          ? (jsonDecode(floraFaunaDataIdsJson) as List)
+              .map((id) => (id as num).toInt())
+              .toSet()
+          : {};
+
+      final markers = [
+        ..._buildMarkersFromData(photoUrlResponse, treeGrowingResponse),
+        ..._buildFloraFaunaMarkersFromData(locationResponse, floraFaunaResponse),
+      ];
+      final polygons = [
+        ..._buildPolygonsFromData(photoUrlResponse, treeGrowingResponse),
+        ..._buildFloraFaunaPolygonsFromData(
+            locationResponse, floraFaunaResponse),
+      ];
 
       if (!mounted) return;
       setState(() {
         _allPhotoUrlRows = photoUrlResponse;
         _allTreeGrowingRows = treeGrowingResponse;
+        _allLocationRows = locationResponse;
+        _allFloraFaunaRows = floraFaunaResponse;
         _markers = markers;
         _polygons = polygons;
         _isLoadingMarkers = false;
@@ -390,8 +479,15 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _applyProjectTypeFilter() {
-    final markers = _buildMarkersFromData(_allPhotoUrlRows, _allTreeGrowingRows);
-    final polygons = _buildPolygonsFromData(_allPhotoUrlRows, _allTreeGrowingRows);
+    final markers = [
+      ..._buildMarkersFromData(_allPhotoUrlRows, _allTreeGrowingRows),
+      ..._buildFloraFaunaMarkersFromData(_allLocationRows, _allFloraFaunaRows),
+    ];
+    final polygons = [
+      ..._buildPolygonsFromData(_allPhotoUrlRows, _allTreeGrowingRows),
+      ..._buildFloraFaunaPolygonsFromData(
+          _allLocationRows, _allFloraFaunaRows),
+    ];
 
     setState(() {
       _markers = markers;
@@ -511,6 +607,114 @@ class _DashboardPageState extends State<DashboardPage>
     return polygons;
   }
 
+  /// Mirrors _buildMarkersFromData but for the Flora and Fauna Survey flow,
+  /// where coordinates live in location (activity_type_id == project_type_id)
+  /// joined via location.activity_id == flora_fauna_survey.id, and species
+  /// data lives in flora_fauna_survey_data.flora_fauna_id.
+  List<Marker> _buildFloraFaunaMarkersFromData(
+    List<dynamic> locationResponse,
+    List<dynamic> floraFaunaResponse,
+  ) {
+    final surveyMap = <int, Map<String, dynamic>>{};
+    for (final item in floraFaunaResponse) {
+      final row = Map<String, dynamic>.from(item as Map);
+      final rowId = _toInt(row['id']);
+      if (rowId != null) {
+        surveyMap[rowId] = row;
+      }
+    }
+
+    final markers = <Marker>[];
+    final seenSurveyIds = <int>{};
+    for (final item in locationResponse) {
+      final row = Map<String, dynamic>.from(item as Map);
+      final lat = _toDouble(row['latitude']);
+      final lng = _toDouble(row['longitude']);
+      final surveyId = _toInt(row['activity_id']);
+
+      if (lat == null || lng == null || surveyId == null) continue;
+
+      final surveyData = surveyMap[surveyId];
+      if (surveyData == null) continue;
+      if (!_matchesSelectedProjectType(surveyData)) continue;
+      if (!_floraFaunaIdsWithSpeciesData.contains(surveyId)) continue;
+
+      // A survey can have several location points — collapse to one marker.
+      if (!seenSurveyIds.add(surveyId)) continue;
+
+      markers.add(
+        Marker(
+          point: ll.LatLng(lat, lng),
+          width: 40,
+          height: 40,
+          child: GestureDetector(
+            onTap: () =>
+                _showMarkerInfo(surveyData, surveyId, row['id'], lat, lng),
+            child: _RingMarkerIcon(seqId: surveyId),
+          ),
+        ),
+      );
+    }
+    return markers;
+  }
+
+  List<Polygon> _buildFloraFaunaPolygonsFromData(
+    List<dynamic> locationResponse,
+    List<dynamic> floraFaunaResponse,
+  ) {
+    final coordinatesBySurvey = <int, List<ll.LatLng>>{};
+    final surveyMap = <int, Map<String, dynamic>>{};
+
+    for (final item in floraFaunaResponse) {
+      final row = Map<String, dynamic>.from(item as Map);
+      final rowId = _toInt(row['id']);
+      if (rowId != null) {
+        surveyMap[rowId] = row;
+      }
+    }
+
+    for (final item in locationResponse) {
+      final row = Map<String, dynamic>.from(item as Map);
+      final surveyId = _toInt(row['activity_id']);
+      final lat = _toDouble(row['latitude']);
+      final lng = _toDouble(row['longitude']);
+
+      if (surveyId == null || lat == null || lng == null) continue;
+
+      final surveyData = surveyMap[surveyId];
+      if (!_matchesSelectedProjectType(surveyData)) continue;
+
+      coordinatesBySurvey.putIfAbsent(surveyId, () => []);
+      coordinatesBySurvey[surveyId]!.add(ll.LatLng(lat, lng));
+    }
+
+    final polygons = <Polygon>[];
+    for (final entry in coordinatesBySurvey.entries) {
+      final points = entry.value;
+      if (points.length < 4) continue;
+
+      final areaHectares =
+          PolygonCalculator.calculatePolygonAreaInHectares(points);
+      var polygonColor = Colors.orange.shade300;
+      if (areaHectares > 10) {
+        polygonColor = Colors.purple.shade300;
+      } else if (areaHectares > 5) {
+        polygonColor = Colors.amber.shade300;
+      }
+
+      polygons.add(
+        Polygon(
+          points: points,
+          color: polygonColor.withValues(alpha: 0.4),
+          borderColor: polygonColor.withValues(alpha: 0.8),
+          borderStrokeWidth: 2.0,
+        ),
+      );
+    }
+
+    return polygons;
+  }
+
   /// Stacks spiderfied cluster markers in a vertical line above/below the
   /// cluster's screen position instead of the package's default circle/spiral.
   List<Offset> _verticalSpiderfyPositions(int markerCount, Offset center) {
@@ -519,6 +723,120 @@ class _DashboardPageState extends State<DashboardPage>
     return List<Offset>.generate(markerCount, (index) {
       return Offset(center.dx, center.dy - totalHeight / 2 + spacing * index);
     });
+  }
+
+  Future<void> _captureAndExportMap() async {
+    setState(() => _isCapturingMap = true);
+
+    try {
+      final boundary = _mapCaptureKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) return;
+
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+
+      final pngBytes = byteData.buffer.asUint8List();
+      final fileName = 'Map_${DateTime.now().millisecondsSinceEpoch}.png';
+
+      if (!mounted) return;
+      final action = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => const ExportOptionsDialog(
+          title: 'Export Map',
+          headerSubtitle: 'Choose how you\'d like to export the map',
+          fileTypeLabel: 'map image',
+        ),
+      );
+
+      if (action == 'save') {
+        await _saveMapImage(fileName, pngBytes);
+      } else if (action == 'share') {
+        await _shareMapImage(fileName, pngBytes);
+      }
+    } catch (e) {
+      debugPrint('Error capturing map: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error capturing map: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isCapturingMap = false);
+    }
+  }
+
+  Future<void> _saveMapImage(String fileName, Uint8List bytes) async {
+    try {
+      if (kIsWeb) {
+        web_helper.downloadBytes(bytes, fileName, 'image/png');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Downloaded $fileName')),
+          );
+        }
+        return;
+      }
+
+      final baseName = fileName.endsWith('.png')
+          ? fileName.substring(0, fileName.length - '.png'.length)
+          : fileName;
+
+      final savedPath = await FileSaver.instance.saveAs(
+        name: baseName,
+        bytes: bytes,
+        ext: 'png',
+        mimeType: MimeType.png,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              savedPath != null ? 'Saved to $savedPath' : 'Map image saved',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error saving map image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving map image: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _shareMapImage(String fileName, Uint8List bytes) async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsBytes(bytes);
+
+      final result = await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(tempFile.path)],
+          subject: fileName,
+          text: 'Sharing $fileName',
+        ),
+      );
+
+      if (result.status == ShareResultStatus.dismissed && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Share cancelled')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error sharing map image: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error sharing map image: $e')),
+        );
+      }
+    }
   }
 
   void _showMarkerInfo(
@@ -570,7 +888,7 @@ class _DashboardPageState extends State<DashboardPage>
                 ),
                 Padding(
                   padding: const EdgeInsets.all(16),
-                  child: FutureBuilder<Map<String, String>>(
+                  child: FutureBuilder<List<MapEntry<String, String>>>(
                     future: _loadDialogDetails(
                       activityId: activityId,
                       activityData: activityData,
@@ -586,28 +904,20 @@ class _DashboardPageState extends State<DashboardPage>
                       }
 
                       final details = snapshot.data ??
-                          {
-                            'Activity': 'N/A',
-                            'Municipality': 'N/A',
-                            'Barangay': 'N/A',
-                            'Lat & Long': 'N/A',
-                            'Seedling Name': 'N/A',
-                            'Seedling Count': '0',
-                            'Area': 'N/A',
-                            'Planting Date': 'N/A',
-                          };
+                          const [
+                            MapEntry('Activity', 'N/A'),
+                            MapEntry('Municipality', 'N/A'),
+                            MapEntry('Barangay', 'N/A'),
+                            MapEntry('Lat & Long', 'N/A'),
+                            MapEntry('Area', 'N/A'),
+                            MapEntry('Planting Date', 'N/A'),
+                          ];
 
                       return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _buildDetailRow('Activity', details['Activity'] ?? 'N/A'),
-                          _buildDetailRow('Municipality', details['Municipality'] ?? 'N/A'),
-                          _buildDetailRow('Barangay', details['Barangay'] ?? 'N/A'),
-                          _buildDetailRow('Lat & Long', details['Lat & Long'] ?? 'N/A'),
-                          _buildDetailRow('Seedling Name', details['Seedling Name'] ?? 'N/A'),
-                          _buildDetailRow('Seedling Count', details['Seedling Count'] ?? '0'),
-                          _buildDetailRow('Area', details['Area'] ?? 'N/A'),
-                          _buildDetailRow('Planting Date', details['Planting Date'] ?? 'N/A'),
+                          for (final entry in details)
+                            _buildDetailRow(entry.key, entry.value),
                           const SizedBox(height: 8),
                           Align(
                             alignment: Alignment.centerRight,
@@ -675,7 +985,7 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
-  Future<Map<String, String>> _loadDialogDetails({
+  Future<List<MapEntry<String, String>>> _loadDialogDetails({
     required dynamic activityId,
     required Map<String, dynamic>? activityData,
     required dynamic lat,
@@ -688,51 +998,100 @@ class _DashboardPageState extends State<DashboardPage>
     final barangay = (safeData['barangay'] ?? 'N/A').toString();
     String latLong = '${lat ?? 'N/A'}, ${lng ?? 'N/A'}';
 
-    String seedlingName = 'N/A';
-    String seedlingCount = '0';
-    String area = 'N/A';
+    // flora_fauna_survey rows carry a survey_date column that tree_growing
+    // rows don't — use it to tell the two activity flows apart.
+    final isFloraFauna = safeData.containsKey('survey_date');
     final plantingDate = _formatPlantingDate(
-      safeData['planting_date'] ?? safeData['created_at'],
+      safeData['survey_date'] ?? safeData['planting_date'] ?? safeData['created_at'],
     );
+
+    String area = 'N/A';
+    // Tree Growing shows two fixed rows; Flora and Fauna instead shows one
+    // row per species_type present (e.g. "Flora", "Fauna"), each listing the
+    // names captured for that type.
+    final speciesGroupRows = <MapEntry<String, String>>[];
 
     try {
       if (activityId != null) {
-        final seedRows = await Supabase.instance.client
-            .from('tree_growing_data')
-            .select('seed_name, seedling_count')
-            .eq('tree_growing_id', activityId);
+        final coords = <ll.LatLng>[];
 
-        final rows = List<Map<String, dynamic>>.from(seedRows as List);
-        if (rows.isNotEmpty) {
-          final names = rows
-              .map((row) => (row['seed_name'] ?? '').toString().trim())
-              .where((name) => name.isNotEmpty)
-              .toSet()
-              .toList();
-          seedlingName = names.isEmpty ? 'N/A' : names.join(', ');
+        if (isFloraFauna) {
+          final speciesRows = await Supabase.instance.client
+              .from('flora_fauna_survey_data')
+              .select('name, species_type')
+              .eq('flora_fauna_id', activityId);
 
-          final total = rows.fold<int>(0, (sum, row) {
-            final qty = (row['seedling_count'] as num?)?.toInt() ?? 0;
-            return sum + qty;
-          });
-          seedlingCount = total.toString();
+          final rows = List<Map<String, dynamic>>.from(speciesRows as List);
+          final namesByType = <String, List<String>>{};
+          for (final row in rows) {
+            final type = (row['species_type'] ?? '').toString().trim();
+            final name = (row['name'] ?? '').toString().trim();
+            if (type.isEmpty || name.isEmpty) continue;
+            namesByType.putIfAbsent(type, () => []).add(name);
+          }
+          for (final entry in namesByType.entries) {
+            speciesGroupRows.add(MapEntry(entry.key, entry.value.join(', ')));
+          }
+
+          final locationRows = await Supabase.instance.client
+              .from('location')
+              .select('latitude, longitude')
+              .eq('activity_id', activityId)
+              .eq('isDeleted', 0);
+
+          coords.addAll(
+            List<Map<String, dynamic>>.from(locationRows as List)
+                .map((row) {
+                  final latitude = _toDouble(row['latitude']);
+                  final longitude = _toDouble(row['longitude']);
+                  if (latitude == null || longitude == null) return null;
+                  return ll.LatLng(latitude, longitude);
+                })
+                .whereType<ll.LatLng>(),
+          );
+        } else {
+          final seedRows = await Supabase.instance.client
+              .from('tree_growing_data')
+              .select('seed_name, seedling_count')
+              .eq('tree_growing_id', activityId);
+
+          final rows = List<Map<String, dynamic>>.from(seedRows as List);
+          String seedlingName = 'N/A';
+          String seedlingCount = '0';
+          if (rows.isNotEmpty) {
+            final names = rows
+                .map((row) => (row['seed_name'] ?? '').toString().trim())
+                .where((name) => name.isNotEmpty)
+                .toSet()
+                .toList();
+            seedlingName = names.isEmpty ? 'N/A' : names.join(', ');
+
+            final total = rows.fold<int>(0, (sum, row) {
+              final qty = (row['seedling_count'] as num?)?.toInt() ?? 0;
+              return sum + qty;
+            });
+            seedlingCount = total.toString();
+          }
+          speciesGroupRows.add(MapEntry('Seedling Name', seedlingName));
+          speciesGroupRows.add(MapEntry('Seedling Count', seedlingCount));
+
+          final coordinateRows = await Supabase.instance.client
+              .from('photourl_area')
+              .select('latitude, longitude')
+              .eq('activity_id', activityId)
+              .eq('isDeleted', 0);
+
+          coords.addAll(
+            List<Map<String, dynamic>>.from(coordinateRows as List)
+                .map((row) {
+                  final latitude = _toDouble(row['latitude']);
+                  final longitude = _toDouble(row['longitude']);
+                  if (latitude == null || longitude == null) return null;
+                  return ll.LatLng(latitude, longitude);
+                })
+                .whereType<ll.LatLng>(),
+          );
         }
-
-        final coordinateRows = await Supabase.instance.client
-            .from('photourl_area')
-            .select('latitude, longitude')
-            .eq('activity_id', activityId)
-            .eq('isDeleted', 0);
-
-        final coords = List<Map<String, dynamic>>.from(coordinateRows as List)
-            .map((row) {
-              final latitude = _toDouble(row['latitude']);
-              final longitude = _toDouble(row['longitude']);
-              if (latitude == null || longitude == null) return null;
-              return ll.LatLng(latitude, longitude);
-            })
-            .whereType<ll.LatLng>()
-            .toList();
 
         if (coords.isNotEmpty) {
           final formatted = coords.asMap().entries.map((entry) {
@@ -748,7 +1107,8 @@ class _DashboardPageState extends State<DashboardPage>
           final ha = PolygonCalculator.calculatePolygonAreaInHectares(coords);
           area = '${ha.toStringAsFixed(2)} ha';
         } else {
-          final areaCover = _toDouble(safeData['area_cover']);
+          final areaCover =
+              _toDouble(safeData[isFloraFauna ? 'area' : 'area_cover']);
           if (areaCover != null && areaCover > 0) {
             area = '${areaCover.toStringAsFixed(2)} ha';
           }
@@ -758,16 +1118,15 @@ class _DashboardPageState extends State<DashboardPage>
       // Keep graceful fallback values.
     }
 
-    return {
-      'Activity': activityName,
-      'Municipality': municipality,
-      'Barangay': barangay,
-      'Lat & Long': latLong,
-      'Seedling Name': seedlingName,
-      'Seedling Count': seedlingCount,
-      'Area': area,
-      'Planting Date': plantingDate,
-    };
+    return [
+      MapEntry('Activity', activityName),
+      MapEntry('Municipality', municipality),
+      MapEntry('Barangay', barangay),
+      MapEntry('Lat & Long', latLong),
+      ...speciesGroupRows,
+      MapEntry('Area', area),
+      MapEntry('Planting Date', plantingDate),
+    ];
   }
 
   String _formatPlantingDate(dynamic value) {
@@ -800,36 +1159,6 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             ),
             const SizedBox(height: 20),
-            GridView.count(
-              crossAxisCount: 3,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 12,
-              mainAxisSpacing: 12,
-              childAspectRatio: 1.45,
-              children: [
-                _buildStatCard(
-                  title: 'Total Tree Growing Activity',
-                  value: _isLoadingCount ? '...' : '$_treeGrowingCount',
-                  trend: _isCachedData ? 'Cached' : 'Live',
-                ),
-                _buildStatCard(
-                  title: 'Total Seedling Available',
-                  value: _isLoadingSeedlingStats
-                      ? '...'
-                      : '$_totalSeedlingAvailable',
-                  trend: _isCachedSeedlingStats ? 'Cached' : 'Live',
-                ),
-                _buildStatCard(
-                  title: 'Total Seedling Release',
-                  value: _isLoadingSeedlingStats
-                      ? '...'
-                      : '$_totalSeedlingRelease',
-                  trend: _isCachedSeedlingStats ? 'Cached' : 'Live',
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
             Card(
               elevation: 1,
               child: Padding(
@@ -862,7 +1191,7 @@ class _DashboardPageState extends State<DashboardPage>
             ),
             const SizedBox(height: 12),
             Container(
-              height: 420,
+              height: MediaQuery.of(context).size.height * 0.70,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
                 color: Colors.white,
@@ -876,7 +1205,9 @@ class _DashboardPageState extends State<DashboardPage>
               ),
               child: Stack(
                 children: [
-                  ClipRRect(
+                  RepaintBoundary(
+                    key: _mapCaptureKey,
+                    child: ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: _isLoadingMarkers
                         ? const Center(child: CircularProgressIndicator())
@@ -953,6 +1284,28 @@ class _DashboardPageState extends State<DashboardPage>
                               ),
                             ],
                           ),
+                    ),
+                  ),
+                  // Capture map button
+                  Positioned(
+                    right: 12,
+                    top: 12,
+                    child: FloatingActionButton(
+                      heroTag: 'capture_map',
+                      onPressed:
+                          _isCapturingMap ? null : _captureAndExportMap,
+                      mini: true,
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black87,
+                      elevation: 3,
+                      child: _isCapturingMap
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.camera_alt_outlined),
+                    ),
                   ),
                   // Zoom controls
                   Positioned(
@@ -1003,6 +1356,36 @@ class _DashboardPageState extends State<DashboardPage>
                 'Showing cached marker data',
                 style: TextStyle(color: Colors.amber.shade800),
               ),
+            const SizedBox(height: 24),
+            GridView.count(
+              crossAxisCount: 3,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.45,
+              children: [
+                _buildStatCard(
+                  title: 'Total Tree Growing Activity',
+                  value: _isLoadingCount ? '...' : '$_treeGrowingCount',
+                  trend: _isCachedData ? 'Cached' : 'Live',
+                ),
+                _buildStatCard(
+                  title: 'Total Seedling Available',
+                  value: _isLoadingSeedlingStats
+                      ? '...'
+                      : '$_totalSeedlingAvailable',
+                  trend: _isCachedSeedlingStats ? 'Cached' : 'Live',
+                ),
+                _buildStatCard(
+                  title: 'Total Seedling Release',
+                  value: _isLoadingSeedlingStats
+                      ? '...'
+                      : '$_totalSeedlingRelease',
+                  trend: _isCachedSeedlingStats ? 'Cached' : 'Live',
+                ),
+              ],
+            ),
           ],
         ),
       ),
