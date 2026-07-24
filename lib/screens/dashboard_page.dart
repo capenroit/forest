@@ -3,6 +3,7 @@ import 'dart:convert' show jsonDecode, jsonEncode;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -31,9 +32,12 @@ class _DashboardPageState extends State<DashboardPage>
   List<Polygon> _polygons = [];
   bool _isLoadingMarkers = true;
   bool _isCachedMarkers = false;
+  int _mapTapVersion = 0;
+  bool _hasExpandedCluster = false;
 
   List<Map<String, dynamic>> _allPhotoUrlRows = [];
   List<Map<String, dynamic>> _allTreeGrowingRows = [];
+  Set<int> _treeGrowingIdsWithSpeciesData = {};
 
   List<Map<String, dynamic>> _projectTypes = [];
   int? _selectedProjectTypeId;
@@ -223,9 +227,24 @@ class _DashboardPageState extends State<DashboardPage>
           .eq('is_deleted', 0)
           .timeout(const Duration(seconds: 5));
 
+      final treeGrowingDataResponse = await Supabase.instance.client
+          .from('tree_growing_data')
+          .select('tree_growing_id')
+          .timeout(const Duration(seconds: 5));
+
+      final idsWithSpeciesData = treeGrowingDataResponse
+          .map((row) => (row as Map)['tree_growing_id'])
+          .whereType<num>()
+          .map((id) => id.toInt())
+          .toSet();
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('photourl_areas_json', jsonEncode(photoUrlResponse));
       await prefs.setString('tree_growing_json', jsonEncode(treeGrowingResponse));
+      await prefs.setString(
+        'tree_growing_data_ids_json',
+        jsonEncode(idsWithSpeciesData.toList()),
+      );
       await prefs.setString('markers_cache_date', DateTime.now().toIso8601String());
 
       final typedPhotoRows = photoUrlResponse
@@ -235,6 +254,7 @@ class _DashboardPageState extends State<DashboardPage>
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
 
+      _treeGrowingIdsWithSpeciesData = idsWithSpeciesData;
       final markers = _buildMarkersFromData(typedPhotoRows, typedTreeRows);
       final polygons = _buildPolygonsFromData(typedPhotoRows, typedTreeRows);
 
@@ -268,6 +288,14 @@ class _DashboardPageState extends State<DashboardPage>
           List<Map<String, dynamic>>.from(jsonDecode(photoUrlJson) as List);
       final treeGrowingResponse =
           List<Map<String, dynamic>>.from(jsonDecode(treeGrowingJson) as List);
+
+      final treeGrowingDataIdsJson =
+          prefs.getString('tree_growing_data_ids_json');
+      _treeGrowingIdsWithSpeciesData = treeGrowingDataIdsJson != null
+          ? (jsonDecode(treeGrowingDataIdsJson) as List)
+              .map((id) => (id as num).toInt())
+              .toSet()
+          : {};
 
       final markers = _buildMarkersFromData(photoUrlResponse, treeGrowingResponse);
       final polygons = _buildPolygonsFromData(photoUrlResponse, treeGrowingResponse);
@@ -381,23 +409,36 @@ class _DashboardPageState extends State<DashboardPage>
     List<dynamic> photoUrlResponse,
     List<dynamic> treeGrowingResponse,
   ) {
-    final activityMap = <dynamic, Map<String, dynamic>>{};
+    final activityMap = <int, Map<String, dynamic>>{};
     for (final item in treeGrowingResponse) {
       final row = Map<String, dynamic>.from(item as Map);
-      activityMap[row['seq_id']] = row;
+      final rowSeqId = (row['seq_id'] as num?)?.toInt();
+      if (rowSeqId != null) {
+        activityMap[rowSeqId] = row;
+      }
     }
 
     final markers = <Marker>[];
+    final seenSeqIds = <int>{};
     for (final item in photoUrlResponse) {
       final row = Map<String, dynamic>.from(item as Map);
       final lat = _toDouble(row['latitude']);
       final lng = _toDouble(row['longitude']);
-      final activityId = row['activity_id'];
+      final seqId = (row['activity_id'] as num?)?.toInt();
 
-      if (lat == null || lng == null) continue;
+      if (lat == null || lng == null || seqId == null) continue;
 
-      final activityData = activityId != null ? activityMap[activityId] : null;
+      // Only show a marker when its activity_id resolves to an actual
+      // tree_growing row (tree_growing.seq_id) AND that row has matching
+      // species data (tree_growing_data.tree_growing_id == seq_id).
+      final activityData = activityMap[seqId];
+      if (activityData == null) continue;
       if (!_matchesSelectedProjectType(activityData)) continue;
+      if (!_treeGrowingIdsWithSpeciesData.contains(seqId)) continue;
+
+      // An activity can have several photourl_area points (one per photo/
+      // coordinate) — collapse them to a single marker per seq_id.
+      if (!seenSeqIds.add(seqId)) continue;
 
       markers.add(
         Marker(
@@ -405,28 +446,8 @@ class _DashboardPageState extends State<DashboardPage>
           width: 40,
           height: 40,
           child: GestureDetector(
-            onTap: () => _showMarkerInfo(activityData, activityId, row['id'], lat, lng),
-            child: Container(
-              width: 35,
-              height: 35,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [Colors.green.shade400, Colors.green.shade600],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.green.shade400.withValues(alpha: 0.6),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: const Icon(Icons.park, color: Colors.white, size: 20),
-            ),
+            onTap: () => _showMarkerInfo(activityData, seqId, row['id'], lat, lng),
+            child: _RingMarkerIcon(seqId: seqId),
           ),
         ),
       );
@@ -488,6 +509,16 @@ class _DashboardPageState extends State<DashboardPage>
     }
 
     return polygons;
+  }
+
+  /// Stacks spiderfied cluster markers in a vertical line above/below the
+  /// cluster's screen position instead of the package's default circle/spiral.
+  List<Offset> _verticalSpiderfyPositions(int markerCount, Offset center) {
+    const spacing = 46.0;
+    final totalHeight = spacing * (markerCount - 1);
+    return List<Offset>.generate(markerCount, (index) {
+      return Offset(center.dx, center.dy - totalHeight / 2 + spacing * index);
+    });
   }
 
   void _showMarkerInfo(
@@ -851,12 +882,23 @@ class _DashboardPageState extends State<DashboardPage>
                         ? const Center(child: CircularProgressIndicator())
                         : FlutterMap(
                             mapController: _mapController,
-                            options: const MapOptions(
-                              initialCenter: ll.LatLng(11.39815374730887, 122.73605826343467),
+                            options: MapOptions(
+                              initialCenter: const ll.LatLng(11.39815374730887, 122.73605826343467),
                               initialZoom: 9.8,
-                              interactionOptions: InteractionOptions(
+                              interactionOptions: const InteractionOptions(
                                 flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                               ),
+                              onTap: (_, __) {
+                                // Only force the (expensive) cluster layer
+                                // remount when a cluster was actually
+                                // expanded — avoids rebuilding the whole
+                                // marker tree on every stray tap, which was
+                                // freezing the map during rapid dragging.
+                                if (_hasExpandedCluster) {
+                                  _hasExpandedCluster = false;
+                                  setState(() => _mapTapVersion++);
+                                }
+                              },
                             ),
                             children: [
                               TileLayer(
@@ -867,7 +909,48 @@ class _DashboardPageState extends State<DashboardPage>
                               ),
                               if (_polygons.isNotEmpty)
                                 PolygonLayer(polygons: _polygons),
-                              MarkerLayer(markers: _markers),
+                              MarkerClusterLayerWidget(
+                                key: ValueKey(_mapTapVersion),
+                                options: MarkerClusterLayerOptions(
+                                  maxClusterRadius: 60,
+                                  disableClusteringAtZoom: 16,
+                                  size: const Size(40, 40),
+                                  markers: _markers,
+                                  zoomToBoundsOnClick: false,
+                                  onClusterTap: (_) =>
+                                      _hasExpandedCluster = true,
+                                  spiderfyShapePositions:
+                                      _verticalSpiderfyPositions,
+                                  builder: (context, markers) {
+                                    return Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        color: Colors.green.shade600,
+                                        border: Border.all(
+                                          color: Colors.white,
+                                          width: 2,
+                                        ),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black
+                                                .withValues(alpha: 0.25),
+                                            blurRadius: 4,
+                                          ),
+                                        ],
+                                      ),
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        markers.length.toString(),
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
                             ],
                           ),
                   ),
@@ -975,6 +1058,36 @@ class _DashboardPageState extends State<DashboardPage>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _RingMarkerIcon extends StatelessWidget {
+  final int seqId;
+
+  const _RingMarkerIcon({required this.seqId});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 28,
+      height: 28,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.green.shade600,
+        border: Border.all(color: Colors.white, width: 2),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        seqId.toString(),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+        textAlign: TextAlign.center,
+        overflow: TextOverflow.clip,
       ),
     );
   }

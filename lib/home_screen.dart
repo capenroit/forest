@@ -227,7 +227,7 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     );
                   }),
-                  _buildNavItem(Icons.forest, "Seed for a Forest", () {
+                  _buildNavItem(Icons.park, "Seed for a Forest", () {
                     Navigator.pop(context);
                     Navigator.push(
                       context,

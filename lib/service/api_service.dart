@@ -107,8 +107,10 @@ class ApiService {
 
   // ===== FLORA/FAUNA SURVEY ENDPOINTS =====
 
-  /// Create a Flora/Fauna survey header row.
+  /// Create or update a Flora/Fauna survey header row.
+  /// Pass [id] to update an existing survey instead of inserting a new one.
   static Future<Map<String, dynamic>> createFloraFaunaSurvey({
+    int? id,
     required String userId,
     required String municipality,
     required String barangay,
@@ -135,12 +137,21 @@ class ApiService {
           'observer': observer.trim(),
       };
 
+      if (id == null) {
+        final response = await _client
+            .from('flora_fauna_survey')
+            .insert(payload)
+            .select()
+            .single();
+        return response;
+      }
+
       final response = await _client
           .from('flora_fauna_survey')
-          .insert(payload)
+          .update(payload)
+          .eq('id', id)
           .select()
           .single();
-
       return response;
     } catch (e) {
       throw Exception('Error creating flora_fauna_survey: $e');
@@ -189,14 +200,39 @@ class ApiService {
     }
   }
 
-  /// Save species detail rows linked to flora_fauna_survey.id.
+  /// Fetch species detail rows for a survey (flora_fauna_survey_data.flora_fauna_id = flora_fauna_survey.id).
+  static Future<List<Map<String, dynamic>>> getFloraFaunaSurveyDataRows(
+    int floraFaunaSurveyId,
+  ) async {
+    try {
+      final data = await _client
+          .from('flora_fauna_survey_data')
+          .select('id, flora_fauna_id, name, scientific_name, species_type')
+          .eq('flora_fauna_id', floraFaunaSurveyId);
+
+      return (data as List<dynamic>)
+          .map((json) => Map<String, dynamic>.from(json as Map))
+          .toList();
+    } catch (e) {
+      throw Exception('Error fetching flora_fauna_survey_data rows: $e');
+    }
+  }
+
+  /// Replace species detail rows linked to flora_fauna_survey.id — any
+  /// existing rows for this survey are deleted before the new set is
+  /// inserted, so this is safe to call for both create and edit flows.
   static Future<void> saveFloraFaunaSurveyDataRows({
     required int floraFaunaSurveyId,
     required List<Map<String, dynamic>> rows,
   }) async {
-    if (rows.isEmpty) return;
-
     try {
+      await _client
+          .from('flora_fauna_survey_data')
+          .delete()
+          .eq('flora_fauna_id', floraFaunaSurveyId);
+
+      if (rows.isEmpty) return;
+
       final payload = rows.map((row) {
         return {
           'flora_fauna_id': floraFaunaSurveyId,

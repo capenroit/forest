@@ -79,6 +79,51 @@ class _CapizFloraFaunaRecentActivityPageState
     }
   }
 
+  Future<void> _editActivity(FloraFaunaEntry activity, int index) async {
+    final surveyId = activity.id;
+    if (surveyId == null) {
+      await _openAddDialog(initialEntry: activity, index: index);
+      return;
+    }
+
+    try {
+      final detailRows = await ApiService.getFloraFaunaSurveyDataRows(surveyId);
+      final speciesDetails = detailRows
+          .map((row) => FloraFaunaSpeciesDetail(
+                speciesType: (row['species_type'] ?? '').toString(),
+                name: (row['name'] ?? '').toString(),
+                scientificName: (row['scientific_name'] ?? '').toString(),
+              ))
+          .toList();
+
+      if (!mounted) return;
+      await _openAddDialog(
+        initialEntry: FloraFaunaEntry(
+          id: activity.id,
+          activityName: activity.activityName,
+          entryType: activity.entryType,
+          speciesName: activity.speciesName,
+          scientificName: activity.scientificName,
+          areaHectares: activity.areaHectares,
+          municipality: activity.municipality,
+          barangay: activity.barangay,
+          surveyDate: activity.surveyDate,
+          observer: activity.observer,
+          speciesDetails: speciesDetails,
+        ),
+        index: index,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load species details: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   Future<void> _openAddDialog({FloraFaunaEntry? initialEntry, int? index}) async {
     await showDialog<void>(
       context: context,
@@ -319,10 +364,7 @@ class _CapizFloraFaunaRecentActivityPageState
                                   final activity = _recentActivities[index];
                                   return _RecentActivityCard(
                                     activity: activity,
-                                    onEdit: () => _openAddDialog(
-                                      initialEntry: activity,
-                                      index: index,
-                                    ),
+                                    onEdit: () => _editActivity(activity, index),
                                     onRemove: () => _confirmRemove(index),
                                   );
                                 },

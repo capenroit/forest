@@ -79,6 +79,11 @@ class SeedlingInventoryPage extends StatefulWidget {
 
 class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
   final List<_AvailableSeedlingItem> _items = [];
+  final TextEditingController _searchController = TextEditingController();
+
+  List<LookupOption> _nurseryFilterOptions = [];
+  LookupOption? _selectedNurseryFilter;
+  String _searchQuery = '';
 
   bool _isLoading = true;
   String? _errorMessage;
@@ -87,6 +92,61 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
   void initState() {
     super.initState();
     _loadAvailableSeedlings();
+    _loadNurseryFilterOptions();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<_AvailableSeedlingItem> get _filteredItems {
+    final query = _searchQuery.trim().toLowerCase();
+    final nurseryFilter = _selectedNurseryFilter;
+
+    return _items.where((item) {
+      if (query.isNotEmpty && !item.species.toLowerCase().contains(query)) {
+        return false;
+      }
+      if (nurseryFilter != null) {
+        final hasStockAtNursery = item.nurseryBreakdown.any(
+          (n) => n.nurseryId == nurseryFilter.id && n.quantity > 0,
+        );
+        if (!hasStockAtNursery) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  int _displayQuantity(_AvailableSeedlingItem item) {
+    final nurseryFilter = _selectedNurseryFilter;
+    if (nurseryFilter == null) return item.totalQuantity;
+    for (final entry in item.nurseryBreakdown) {
+      if (entry.nurseryId == nurseryFilter.id) return entry.quantity;
+    }
+    return 0;
+  }
+
+  Future<void> _loadNurseryFilterOptions() async {
+    try {
+      final rows = await Supabase.instance.client
+          .from('seedling_nursery')
+          .select('seq_id, name');
+
+      final options = (rows as List<dynamic>)
+          .map((row) => LookupOption(
+                id: (row['seq_id'] as num).toInt(),
+                name: (row['name'] as String).trim(),
+              ))
+          .toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+      if (!mounted) return;
+      setState(() => _nurseryFilterOptions = options);
+    } catch (_) {
+      // Nursery filter stays empty; filtering by nursery just won't be offered.
+    }
   }
 
   @override
@@ -131,6 +191,85 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                 ],
               ),
             ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _searchController,
+                    onChanged: (value) => setState(() => _searchQuery = value),
+                    decoration: InputDecoration(
+                      hintText: 'Search species',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _searchQuery.isEmpty
+                          ? null
+                          : IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () {
+                                _searchController.clear();
+                                setState(() => _searchQuery = '');
+                              },
+                            ),
+                      filled: true,
+                      fillColor: Colors.white,
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(10)),
+                        borderSide: BorderSide(color: Color(0xFF1B8B5E), width: 2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<LookupOption?>(
+                    initialValue: _selectedNurseryFilter,
+                    isExpanded: true,
+                    items: [
+                      const DropdownMenuItem<LookupOption?>(
+                        value: null,
+                        child: Text('All Nurseries'),
+                      ),
+                      ..._nurseryFilterOptions.map(
+                        (option) => DropdownMenuItem<LookupOption?>(
+                          value: option,
+                          child: Text(option.name),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => _selectedNurseryFilter = value),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: Colors.white,
+                      prefixIcon: Icon(Icons.filter_alt_outlined,
+                          color: Colors.grey.shade600),
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: Colors.grey.shade200),
+                      ),
+                      focusedBorder: const OutlineInputBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(10)),
+                        borderSide: BorderSide(color: Color(0xFF1B8B5E), width: 2),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             Expanded(child: _buildBody()),
             if (!_isLoading && _errorMessage == null) _buildTotalFooter(),
           ],
@@ -168,7 +307,8 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
   }
 
   Widget _buildTotalFooter() {
-    final total = _items.fold<int>(0, (sum, item) => sum + item.totalQuantity);
+    final total = _filteredItems.fold<int>(
+        0, (sum, item) => sum + _displayQuantity(item));
 
     return Container(
       width: double.infinity,
@@ -240,13 +380,24 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
       );
     }
 
+    final filtered = _filteredItems;
+
+    if (filtered.isEmpty) {
+      return const Center(
+        child: Text(
+          'No seedlings match your search or filter.',
+          style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
+        ),
+      );
+    }
+
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 6, 20, 88),
-      itemCount: _items.length,
+      itemCount: filtered.length,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
-        return _buildAvailableSeedlingCard(_items[index]);
+        return _buildAvailableSeedlingCard(filtered[index]);
       },
     );
   }
@@ -283,7 +434,7 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
               flex: 2,
               child: _buildInlineField(
                 label: 'Available',
-                value: item.totalQuantity.toString(),
+                value: _displayQuantity(item).toString(),
               ),
             ),
             const Icon(

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// Returns 'save', 'share', or null (cancelled) via [Navigator.pop].
@@ -69,18 +70,23 @@ class ExportOptionsDialog extends StatelessWidget {
                     iconColor: Colors.green.shade600,
                     fillColor: Colors.green.shade50,
                     title: 'Save to Device',
-                    subtitle: 'Save the Excel file locally',
+                    subtitle: kIsWeb
+                        ? 'Download the Excel file'
+                        : 'Save the Excel file locally',
                     onTap: () => Navigator.of(context).pop('save'),
                   ),
-                  const SizedBox(height: 12),
-                  _ExportOptionTile(
-                    icon: Icons.bluetooth,
-                    iconColor: Colors.blue.shade600,
-                    fillColor: Colors.blue.shade50,
-                    title: 'Send to Another Device',
-                    subtitle: 'Share via Bluetooth to a PC, laptop, or phone',
-                    onTap: () => Navigator.of(context).pop('share'),
-                  ),
+                  if (!kIsWeb) ...[
+                    const SizedBox(height: 12),
+                    _ExportOptionTile(
+                      icon: Icons.bluetooth,
+                      iconColor: Colors.blue.shade600,
+                      fillColor: Colors.blue.shade50,
+                      title: 'Send to Another Device',
+                      subtitle:
+                          'Share via Bluetooth to a PC, laptop, or phone',
+                      onTap: () => Navigator.of(context).pop('share'),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   SizedBox(
                     width: double.infinity,

@@ -13,7 +13,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../service/api_service.dart';
 import '../widget/export_options_dialog.dart';
+import '../widget/web_helper.dart' as web_helper;
 
 class ReportPage extends StatelessWidget {
   const ReportPage({super.key});
@@ -48,6 +50,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   List<Map<String, dynamic>> _reportData = [];
   List<Map<String, dynamic>> _projectTypes = [];
   String _selectedPeriod = 'all';
+  DateTimeRange? _selectedDateRange;
   late ScrollController _horizontalScrollController;
   bool _isLoadingReport = false;
 
@@ -163,13 +166,20 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return;
       }
 
-      final mapData = List<Map<String, dynamic>>.from(data);
+      var mapData = List<Map<String, dynamic>>.from(data);
+
+      if (tableName == 'tree_growing') {
+        mapData = await _attachTreeGrowingSpeciesRows(mapData);
+      }
+
       final filteredData = await compute(
         _filterDataInBackground,
         {
           'data': mapData,
           'period': _selectedPeriod,
           'dateFieldName': _getDateFieldName(),
+          'startDate': _selectedDateRange?.start.toIso8601String(),
+          'endDate': _selectedDateRange?.end.toIso8601String(),
         },
       );
 
@@ -204,6 +214,50 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
+  /// Expands each tree_growing activity row into one row per species/count
+  /// captured in tree_growing_data, joined via
+  /// tree_growing.seq_id == tree_growing_data.tree_growing_id.
+  Future<List<Map<String, dynamic>>> _attachTreeGrowingSpeciesRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final seqIds = rows
+        .map((row) => (row['seq_id'] as num?)?.toInt())
+        .whereType<int>()
+        .toList();
+
+    if (seqIds.isEmpty) return rows;
+
+    Map<int, List<Map<String, dynamic>>> seedRowsByActivity;
+    try {
+      seedRowsByActivity =
+          await ApiService.getTreeGrowingDataByTreeGrowingIds(seqIds);
+    } catch (e) {
+      debugPrint('⚠️ Error fetching tree_growing_data rows: $e');
+      return rows;
+    }
+
+    final flattened = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final seqId = (row['seq_id'] as num?)?.toInt();
+      final seedRows = seqId != null ? seedRowsByActivity[seqId] : null;
+
+      if (seedRows == null || seedRows.isEmpty) {
+        // No matching tree_growing_data rows for this activity — omit it.
+        continue;
+      }
+
+      for (final seedRow in seedRows) {
+        flattened.add({
+          ...row,
+          'tree_species': seedRow['seed_name'],
+          'number_of_trees': seedRow['seedling_count'],
+        });
+      }
+    }
+
+    return flattened;
+  }
+
   static Future<List<Map<String, dynamic>>> _filterDataInBackground(
     Map<String, dynamic> params,
   ) async {
@@ -211,34 +265,28 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final period = params['period'] as String;
     final dateFieldName = params['dateFieldName'] as String;
 
-    if (period == 'all') {
+    if (period != 'date_range') {
       return data;
     }
 
-    final now = DateTime.now();
+    final startDateString = params['startDate'] as String?;
+    final endDateString = params['endDate'] as String?;
+    if (startDateString == null || endDateString == null) {
+      return data;
+    }
+
+    final startDate = DateTime.parse(startDateString);
+    final endDate = DateTime.parse(endDateString);
+    final endOfDay =
+        DateTime(endDate.year, endDate.month, endDate.day, 23, 59, 59);
+
     return data.where((item) {
       try {
         final dateString = item[dateFieldName]?.toString();
         if (dateString == null || dateString.isEmpty) return false;
 
         final date = DateTime.parse(dateString);
-
-        switch (period) {
-          case 'week':
-            final weekAgo = now.subtract(const Duration(days: 7));
-            return date.isAfter(weekAgo) &&
-                date.isBefore(now.add(const Duration(days: 1)));
-          case 'month':
-            return date.year == now.year && date.month == now.month;
-          case 'quarter':
-            final quarter = (now.month - 1) ~/ 3;
-            final itemQuarter = (date.month - 1) ~/ 3;
-            return date.year == now.year && itemQuarter == quarter;
-          case 'year':
-            return date.year == now.year;
-          default:
-            return true;
-        }
+        return !date.isBefore(startDate) && !date.isAfter(endOfDay);
       } catch (e) {
         return false;
       }
@@ -480,31 +528,60 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                             child: Text('All Time'),
                                           ),
                                           DropdownMenuItem(
-                                            value: 'week',
-                                            child: Text('This Week'),
-                                          ),
-                                          DropdownMenuItem(
-                                            value: 'month',
-                                            child: Text('This Month'),
-                                          ),
-                                          DropdownMenuItem(
-                                            value: 'quarter',
-                                            child: Text('This Quarter'),
-                                          ),
-                                          DropdownMenuItem(
-                                            value: 'year',
-                                            child: Text('This Year'),
+                                            value: 'date_range',
+                                            child: Text('Date Range'),
                                           ),
                                         ],
-                                        onChanged: (value) {
-                                          if (value != null) {
+                                        onChanged: (value) async {
+                                          if (value == null) return;
+
+                                          if (value == 'date_range') {
+                                            final picked =
+                                                await _pickDateRange();
+                                            if (picked == null) return;
+
                                             setState(() {
-                                              _selectedPeriod = value;
+                                              _selectedPeriod = 'date_range';
+                                              _selectedDateRange = picked;
                                             });
                                             _loadReport();
+                                            return;
                                           }
+
+                                          setState(() {
+                                            _selectedPeriod = value;
+                                            _selectedDateRange = null;
+                                          });
+                                          _loadReport();
                                         },
                                       ),
+                                      if (_selectedPeriod == 'date_range' &&
+                                          _selectedDateRange != null)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                              top: 4),
+                                          child: GestureDetector(
+                                            onTap: () async {
+                                              final picked =
+                                                  await _pickDateRange();
+                                              if (picked == null) return;
+
+                                              setState(() {
+                                                _selectedDateRange = picked;
+                                              });
+                                              _loadReport();
+                                            },
+                                            child: Text(
+                                              '${_formatDate(_selectedDateRange!.start)} - ${_formatDate(_selectedDateRange!.end)}',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.blue.shade700,
+                                                decoration:
+                                                    TextDecoration.underline,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
                                     ],
                                   ),
                                 ),
@@ -696,31 +773,64 @@ class _ReportsScreenState extends State<ReportsScreen> {
     );
   }
 
+  /// Picks a start then end date via two single-date pickers, each of which
+  /// lets the user tap the header to jump straight to a year/month grid
+  /// instead of scrolling the calendar month-by-month.
+  Future<DateTimeRange?> _pickDateRange() async {
+    final start = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+      initialDate: _selectedDateRange?.start ?? DateTime.now(),
+      helpText: 'Select Start Date',
+    );
+    if (start == null || !mounted) return null;
+
+    final initialEnd = _selectedDateRange?.end;
+    final end = await showDatePicker(
+      context: context,
+      firstDate: start,
+      lastDate: DateTime.now(),
+      initialDate: initialEnd != null && !initialEnd.isBefore(start)
+          ? initialEnd
+          : start,
+      helpText: 'Select End Date',
+    );
+    if (end == null) return null;
+
+    return DateTimeRange(start: start, end: end);
+  }
+
   String _getReportTitle() {
     return 'Tree Growing Report';
   }
 
   List<String> _getColumnsToDisplay() {
     return [
+      'seq_id',
       'activity_name',
       'tree_species',
       'number_of_trees',
       'area_cover',
-      'planting_date'
+      'municipality',
+      'barangay',
+      'planting_date',
     ];
   }
 
   List<int> _getColumnFlexValues() {
-    return [5, 9, 3, 3, 3];
+    return [2, 5, 6, 3, 3, 4, 4, 3];
   }
 
   String _getColumnDisplayName(String columnName) {
     final nameMap = {
-      'seq_id': 'ID',
+      'seq_id': 'No.',
       'activity_name': 'Activity Name',
       'tree_species': 'Species',
       'number_of_trees': 'Number of Trees',
       'area_cover': 'Area Cover',
+      'municipality': 'Municipality',
+      'barangay': 'Barangay',
       'planting_date': 'Date',
       'date': 'Date',
       'quantity': 'Quantity',
@@ -730,39 +840,42 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   double _getColumnRatio(String columnName) {
     switch (columnName) {
+      case 'seq_id':
+        return 0.06;
       case 'activity_name':
-        return 0.20;
+        return 0.16;
       case 'tree_species':
-        return 0.38;
+        return 0.16;
       case 'number_of_trees':
-        return 0.15;
+        return 0.12;
       case 'area_cover':
-        return 0.15;
+        return 0.12;
+      case 'municipality':
+        return 0.14;
+      case 'barangay':
+        return 0.14;
       case 'date':
-        return 0.15;
+      case 'planting_date':
+        return 0.14;
       default:
         return 0.10;
     }
   }
 
+  List<Map<String, dynamic>> _sortBySeqId(List<Map<String, dynamic>> data) {
+    final sorted = List<Map<String, dynamic>>.from(data);
+    sorted.sort((a, b) {
+      final seqA = (a['seq_id'] as num?)?.toInt() ?? 0;
+      final seqB = (b['seq_id'] as num?)?.toInt() ?? 0;
+      return seqA.compareTo(seqB);
+    });
+    return sorted;
+  }
+
   Widget _buildCustomTable() {
     final columnsToShow = _getColumnsToDisplay();
 
-    final sortedData = List<Map<String, dynamic>>.from(_reportData);
-    final dateFieldName = _getDateFieldName();
-    sortedData.sort((a, b) {
-      try {
-        final dateA = a[dateFieldName] != null
-            ? DateTime.parse(a[dateFieldName].toString())
-            : DateTime(2000);
-        final dateB = b[dateFieldName] != null
-            ? DateTime.parse(b[dateFieldName].toString())
-            : DateTime(2000);
-        return dateA.compareTo(dateB);
-      } catch (_) {
-        return 0;
-      }
-    });
+    final sortedData = _sortBySeqId(_reportData);
 
     final startIndex = _currentPage * _rowsPerPage;
     final endIndex = min(startIndex + _rowsPerPage, sortedData.length);
@@ -891,8 +1004,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         cell.cellStyle = CellStyle(bold: true);
       }
 
-      for (int rowIndex = 0; rowIndex < _reportData.length; rowIndex++) {
-        var row = _reportData[rowIndex];
+      final exportData = _sortBySeqId(_reportData);
+      for (int rowIndex = 0; rowIndex < exportData.length; rowIndex++) {
+        var row = exportData[rowIndex];
         for (int colIndex = 0; colIndex < columnsToShow.length; colIndex++) {
           var cell = sheetObject.cell(CellIndex.indexByColumnRow(
             columnIndex: colIndex,
@@ -945,6 +1059,23 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
   Future<void> _saveExcelFile(String fileName, Uint8List bytes) async {
     try {
+      if (kIsWeb) {
+        // FileSaver's web implementation has been unreliable; trigger the
+        // browser download directly via an anchor + Blob instead.
+        web_helper.downloadBytes(
+          bytes,
+          fileName,
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        );
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Downloaded $fileName')),
+          );
+        }
+        return;
+      }
+
       // FileSaver appends `ext` to `name` itself, so the base name must not
       // already carry the extension or the saved file ends up double-suffixed
       // (e.g. "report.xlsx.xlsx").

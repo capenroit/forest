@@ -12,19 +12,21 @@ import '../widget/add_flora_fauna_dialog.dart';
 import '../widget/edit_coordinate_dialog.dart';
 import '../widget/polygon_calculator.dart';
 
-class _SpeciesDetail {
+class FloraFaunaSpeciesDetail {
   final String speciesType;
   final String name;
   final String scientificName;
   final String? photoPath;
 
-  const _SpeciesDetail({
+  const FloraFaunaSpeciesDetail({
     required this.speciesType,
     required this.name,
     required this.scientificName,
     this.photoPath,
   });
 }
+
+typedef _SpeciesDetail = FloraFaunaSpeciesDetail;
 
 class FloraFaunaEntry {
   final int? id;
@@ -37,6 +39,7 @@ class FloraFaunaEntry {
   final String barangay;
   final DateTime surveyDate;
   final String observer;
+  final List<FloraFaunaSpeciesDetail> speciesDetails;
 
   const FloraFaunaEntry({
     this.id,
@@ -49,6 +52,7 @@ class FloraFaunaEntry {
     required this.barangay,
     required this.surveyDate,
     required this.observer,
+    this.speciesDetails = const [],
   });
 }
 
@@ -99,14 +103,16 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
 
     _speciesDetails = initial == null
         ? <_SpeciesDetail>[]
-        : <_SpeciesDetail>[
-            _SpeciesDetail(
-              speciesType: initial.entryType,
-              name: initial.speciesName,
-              scientificName: initial.scientificName,
-              photoPath: null,
-            ),
-          ];
+        : initial.speciesDetails.isNotEmpty
+            ? List<_SpeciesDetail>.from(initial.speciesDetails)
+            : <_SpeciesDetail>[
+                _SpeciesDetail(
+                  speciesType: initial.entryType,
+                  name: initial.speciesName,
+                  scientificName: initial.scientificName,
+                  photoPath: null,
+                ),
+              ];
     _selectedBarangay =
         initial?.barangay.trim().isNotEmpty == true ? initial!.barangay.trim() : null;
     _activityNameController = TextEditingController(
@@ -1327,6 +1333,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
 
     try {
       final savedSurvey = await ApiService.createFloraFaunaSurvey(
+        id: widget.initialData?.id,
         userId: authUserId,
         municipality: municipality,
         barangay: barangay,
@@ -1400,6 +1407,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
           barangay: barangay,
           surveyDate: _surveyDate,
           observer: _observerController.text.trim(),
+          speciesDetails: List<FloraFaunaSpeciesDetail>.unmodifiable(_speciesDetails),
         ),
       );
     } catch (_) {
