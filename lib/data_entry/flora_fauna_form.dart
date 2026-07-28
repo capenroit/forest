@@ -16,12 +16,14 @@ class FloraFaunaSpeciesDetail {
   final String speciesType;
   final String name;
   final String scientificName;
+  final String? classification;
   final String? photoPath;
 
   const FloraFaunaSpeciesDetail({
     required this.speciesType,
     required this.name,
     required this.scientificName,
+    this.classification,
     this.photoPath,
   });
 }
@@ -113,8 +115,9 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                   photoPath: null,
                 ),
               ];
-    _selectedBarangay =
-        initial?.barangay.trim().isNotEmpty == true ? initial!.barangay.trim() : null;
+    _selectedBarangay = initial?.barangay.trim().isNotEmpty == true
+        ? initial!.barangay.trim()
+        : null;
     _activityNameController = TextEditingController(
       text: initial?.activityName ?? '',
     );
@@ -426,7 +429,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
               ),
               TextButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Remove', style: TextStyle(color: Colors.red)),
+                child:
+                    const Text('Remove', style: TextStyle(color: Colors.red)),
               ),
             ],
           ),
@@ -473,7 +477,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                 _isCapturingLocation ? Icons.hourglass_top : Icons.my_location,
                 size: 18,
               ),
-              label: Text(_isCapturingLocation ? 'Capturing...' : 'Capture GPS'),
+              label:
+                  Text(_isCapturingLocation ? 'Capturing...' : 'Capture GPS'),
             ),
           ),
           const SizedBox(height: 10),
@@ -663,8 +668,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
       }
     }
 
-    final hasBarangayItems =
-        !_isLoadingMunicipalities &&
+    final hasBarangayItems = !_isLoadingMunicipalities &&
         !_isLoadingBarangays &&
         _selectedMunicipality != null &&
         _filteredBarangays.isNotEmpty;
@@ -739,7 +743,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSectionHeader('Survey Details', Icons.assignment_rounded),
+                    _buildSectionHeader(
+                        'Survey Details', Icons.assignment_rounded),
                     const SizedBox(height: 10),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -778,7 +783,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                                     });
 
                                     if (municipalityId != null) {
-                                      _loadBarangaysForMunicipality(municipalityId);
+                                      _loadBarangaysForMunicipality(
+                                          municipalityId);
                                     }
                                   },
                             decoration: _modernInputDecoration(
@@ -818,7 +824,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                                     _filteredBarangays.isEmpty)
                                 ? null
                                 : (String? newValue) {
-                                    setState(() => _selectedBarangay = newValue);
+                                    setState(
+                                        () => _selectedBarangay = newValue);
                                   },
                             decoration: _modernInputDecoration(
                               label: 'Barangay',
@@ -896,11 +903,13 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                     const SizedBox(height: 10),
                     _buildSpeciesDetailsTable(),
                     const SizedBox(height: 14),
-                    _buildSectionHeader('GPS Coordinates', Icons.my_location_rounded),
+                    _buildSectionHeader(
+                        'GPS Coordinates', Icons.my_location_rounded),
                     const SizedBox(height: 10),
                     _buildGpsCaptureSection(),
                     const SizedBox(height: 14),
-                    _buildSectionHeader('Area and Date', Icons.event_note_rounded),
+                    _buildSectionHeader(
+                        'Area and Date', Icons.event_note_rounded),
                     const SizedBox(height: 10),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -954,9 +963,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                   ],
                 ),
               ),
-            
-          ),
-          Container(
+            ),
+            Container(
               decoration: BoxDecoration(
                 color: const Color(0xFFF8FAF8),
                 border: Border(
@@ -971,7 +979,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                       onPressed: _isSaving ? null : widget.onCancel,
                       style: OutlinedButton.styleFrom(
                         minimumSize: const Size(double.infinity, 44),
-                        side: const BorderSide(color: Color(0xFF1B8B5E), width: 1.5),
+                        side: const BorderSide(
+                            color: Color(0xFF1B8B5E), width: 1.5),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8),
                         ),
@@ -1052,143 +1061,162 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                       flex: 5,
                       child: Text(
                         'Species',
-                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 13),
                       ),
                     ),
                     Expanded(
                       flex: 2,
                       child: Text(
                         'Species Type',
-                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 13),
                       ),
                     ),
                     Expanded(
                       flex: 3,
                       child: Text(
                         'Actions',
-                        style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                        style: TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 13),
                         textAlign: TextAlign.center,
                       ),
                     ),
                   ],
                 ),
               ),
-          if (_speciesDetails.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 20),
-              child: Text(
-                'No species details yet.',
-                style: TextStyle(color: Color(0xFF6B7280), fontSize: 13),
-              ),
-            )
-          else
-            ListView.separated(
-              itemCount: _speciesDetails.length,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              separatorBuilder: (_, __) => const Divider(
-                height: 1,
-                color: Color(0xFFD7E6DE),
-              ),
-              itemBuilder: (context, index) {
-                final item = _speciesDetails[index];
-                return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        flex: 5,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.name,
+              if (_speciesDetails.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Text(
+                    'No species details yet.',
+                    style: TextStyle(color: Color(0xFF6B7280), fontSize: 13),
+                  ),
+                )
+              else
+                ListView.separated(
+                  itemCount: _speciesDetails.length,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  separatorBuilder: (_, __) => const Divider(
+                    height: 1,
+                    color: Color(0xFFD7E6DE),
+                  ),
+                  itemBuilder: (context, index) {
+                    final item = _speciesDetails[index];
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 5,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  item.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  item.scientificName,
+                                  style: const TextStyle(
+                                    color: Color(0xFF6B7280),
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                                if (item.classification != null &&
+                                    item.classification!.trim().isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    item.classification!,
+                                    style: const TextStyle(
+                                      color: Color(0xFF1976D2),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                                if (item.photoPath != null) ...[
+                                  const SizedBox(height: 2),
+                                  const Text(
+                                    'Photo captured',
+                                    style: TextStyle(
+                                      color: Color(0xFF1B8B5E),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              item.speciesType,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w600,
-                                fontSize: 13,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              item.scientificName,
-                              style: const TextStyle(
-                                color: Color(0xFF6B7280),
                                 fontSize: 12,
-                                fontStyle: FontStyle.italic,
+                                color: Color(0xFF1F2937),
                               ),
                             ),
-                            if (item.photoPath != null) ...[
-                              const SizedBox(height: 2),
-                              const Text(
-                                'Photo captured',
-                                style: TextStyle(
-                                  color: Color(0xFF1B8B5E),
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        flex: 2,
-                        child: Text(
-                          item.speciesType,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                            color: Color(0xFF1F2937),
                           ),
-                        ),
-                      ),
-                      Expanded(
-                        flex: 3,
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            IconButton(
-                              tooltip: 'Edit',
-                              icon: const Icon(Icons.edit, color: Color(0xFF1B8B5E)),
-                              onPressed: () => _openAddSpeciesDialog(index: index),
+                          Expanded(
+                            flex: 3,
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Edit',
+                                  icon: const Icon(Icons.edit,
+                                      color: Color(0xFF1B8B5E)),
+                                  onPressed: () =>
+                                      _openAddSpeciesDialog(index: index),
+                                ),
+                                IconButton(
+                                  tooltip: 'Delete',
+                                  icon: const Icon(Icons.delete_outline,
+                                      color: Colors.red),
+                                  onPressed: () => _deleteSpeciesDetail(index),
+                                ),
+                              ],
                             ),
-                            IconButton(
-                              tooltip: 'Delete',
-                              icon: const Icon(Icons.delete_outline, color: Colors.red),
-                              onPressed: () => _deleteSpeciesDetail(index),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
+                    );
+                  },
+                ),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: Color(0xFFD7E6DE)),
                   ),
-                );
-              },
-            ),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: const BoxDecoration(
-              border: Border(
-                top: BorderSide(color: Color(0xFFD7E6DE)),
+                ),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Total:',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '${_speciesDetails.length} type',
+                      style: const TextStyle(
+                        color: Color(0xFF1B8B5E),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            child: Row(
-              children: [
-                const Text(
-                  'Total:',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                const Spacer(),
-                Text(
-                  '${_speciesDetails.length} type',
-                  style: const TextStyle(
-                    color: Color(0xFF1B8B5E),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
             ],
           ),
         ),
@@ -1216,12 +1244,14 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
         initialSpeciesType: currentItem?.speciesType,
         initialName: currentItem?.name,
         initialScientificName: currentItem?.scientificName,
+        initialClassification: currentItem?.classification,
         initialPhotoPath: currentItem?.photoPath,
         submitLabel: index == null ? 'Add Species' : 'Update Species',
         onAdd: ({
           required String speciesType,
           required String name,
           required String scientificName,
+          String? classification,
           String? photoPath,
         }) {
           setState(() {
@@ -1229,6 +1259,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
               speciesType: speciesType,
               name: name,
               scientificName: scientificName,
+              classification: classification,
               photoPath: photoPath,
             );
             if (index == null) {
@@ -1255,7 +1286,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
               ),
               TextButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Delete', style: TextStyle(color: Colors.red)),
+                child:
+                    const Text('Delete', style: TextStyle(color: Colors.red)),
               ),
             ],
           ),
@@ -1273,19 +1305,17 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
     }
     if (_speciesDetails.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please add at least one species detail.')),
+        const SnackBar(
+            content: Text('Please add at least one species detail.')),
       );
       return;
     }
 
     final first = _speciesDetails.first;
-    final entryType = _speciesDetails
-                .map((item) => item.speciesType)
-                .toSet()
-                .length ==
-            1
-        ? first.speciesType
-        : 'Mixed';
+    final entryType =
+        _speciesDetails.map((item) => item.speciesType).toSet().length == 1
+            ? first.speciesType
+            : 'Mixed';
     final speciesName = _speciesDetails.length == 1
         ? first.name
         : '${first.name} +${_speciesDetails.length - 1} more';
@@ -1355,6 +1385,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                 'name': item.name,
                 'scientific_name': item.scientificName,
                 'species_type': item.speciesType,
+                'classification': item.classification,
               })
           .toList();
 
@@ -1407,7 +1438,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
           barangay: barangay,
           surveyDate: _surveyDate,
           observer: _observerController.text.trim(),
-          speciesDetails: List<FloraFaunaSpeciesDetail>.unmodifiable(_speciesDetails),
+          speciesDetails:
+              List<FloraFaunaSpeciesDetail>.unmodifiable(_speciesDetails),
         ),
       );
     } catch (_) {

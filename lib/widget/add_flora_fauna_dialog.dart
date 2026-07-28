@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../service/lookup_service.dart';
+
 class AddFloraFaunaDialog extends StatefulWidget {
   final void Function({
     required String speciesType,
     required String name,
     required String scientificName,
+    String? classification,
     String? photoPath,
   }) onAdd;
   final String? initialSpeciesType;
   final String? initialName;
   final String? initialScientificName;
+  final String? initialClassification;
   final String? initialPhotoPath;
   final String submitLabel;
 
@@ -20,6 +24,7 @@ class AddFloraFaunaDialog extends StatefulWidget {
     this.initialSpeciesType,
     this.initialName,
     this.initialScientificName,
+    this.initialClassification,
     this.initialPhotoPath,
     this.submitLabel = 'Add Species',
   });
@@ -35,6 +40,9 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
   late TextEditingController _scientificNameController;
   late String _speciesType;
   String? _capturedPhotoPath;
+  List<LookupOption> _classificationOptions = [];
+  LookupOption? _selectedClassification;
+  bool _isLoadingClassifications = false;
 
   @override
   void initState() {
@@ -44,6 +52,7 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
     _scientificNameController =
         TextEditingController(text: widget.initialScientificName ?? '');
     _capturedPhotoPath = widget.initialPhotoPath;
+    _loadClassificationOptions(preserveSelection: true);
   }
 
   @override
@@ -51,6 +60,40 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
     _nameController.dispose();
     _scientificNameController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadClassificationOptions({bool preserveSelection = false}) async {
+    setState(() {
+      _isLoadingClassifications = true;
+      _classificationOptions = [];
+      _selectedClassification = null;
+    });
+
+    final options = _speciesType == 'Fauna'
+        ? await LookupService.getFaunaClassificationOptions()
+        : await LookupService.getFloraClassificationOptions();
+
+    if (!mounted) return;
+
+    LookupOption? matched;
+    final initialClassification = widget.initialClassification?.trim();
+    if (preserveSelection &&
+        initialClassification != null &&
+        initialClassification.isNotEmpty) {
+      final lower = initialClassification.toLowerCase();
+      for (final option in options) {
+        if (option.name.trim().toLowerCase() == lower) {
+          matched = option;
+          break;
+        }
+      }
+    }
+
+    setState(() {
+      _classificationOptions = options;
+      _selectedClassification = matched;
+      _isLoadingClassifications = false;
+    });
   }
 
   Future<void> _capturePhoto() async {
@@ -156,14 +199,86 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
                           DropdownMenuItem(value: 'Fauna', child: Text('Fauna')),
                         ],
                         onChanged: (value) {
-                          if (value == null) return;
+                          if (value == null || value == _speciesType) return;
                           setState(() => _speciesType = value);
+                          _loadClassificationOptions();
                         },
                         decoration: InputDecoration(
                           filled: true,
                           fillColor: Colors.green.shade50,
                           prefixIcon:
                               Icon(Icons.category, color: Colors.green.shade600),
+                          contentPadding: const EdgeInsets.symmetric(
+                            vertical: 12,
+                            horizontal: 12,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: Colors.grey.shade200),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: BorderSide(color: Colors.grey.shade200),
+                          ),
+                          focusedBorder: const OutlineInputBorder(
+                            borderRadius: BorderRadius.all(Radius.circular(8)),
+                            borderSide: BorderSide(
+                              color: Color(0xFF1B8B5E),
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        _speciesType == 'Fauna'
+                            ? 'Classification of Fauna'
+                            : 'Classification of Flora',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<LookupOption>(
+                        value: _selectedClassification,
+                        onChanged: _isLoadingClassifications
+                            ? null
+                            : (value) {
+                                setState(() => _selectedClassification = value);
+                              },
+                        items: _isLoadingClassifications
+                            ? const [
+                                DropdownMenuItem(
+                                  value: null,
+                                  child: Text('Loading...'),
+                                ),
+                              ]
+                            : _classificationOptions.isEmpty
+                                ? const [
+                                    DropdownMenuItem(
+                                      value: null,
+                                      child: Text('No classifications found'),
+                                    ),
+                                  ]
+                                : _classificationOptions.map((option) {
+                                    return DropdownMenuItem(
+                                      value: option,
+                                      child: Text(option.name),
+                                    );
+                                  }).toList(),
+                        validator: (value) {
+                          if (value == null) {
+                            return 'Classification is required';
+                          }
+                          return null;
+                        },
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: Colors.green.shade50,
+                          prefixIcon:
+                              Icon(Icons.category_outlined, color: Colors.green.shade600),
                           contentPadding: const EdgeInsets.symmetric(
                             vertical: 12,
                             horizontal: 12,
@@ -383,6 +498,7 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
                             speciesType: _speciesType,
                             name: _nameController.text.trim(),
                             scientificName: _scientificNameController.text.trim(),
+                            classification: _selectedClassification?.name,
                             photoPath: _capturedPhotoPath,
                           );
                           Navigator.pop(context);

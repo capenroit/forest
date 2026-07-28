@@ -93,6 +93,10 @@ class _CapizFloraFaunaRecentActivityPageState
                 speciesType: (row['species_type'] ?? '').toString(),
                 name: (row['name'] ?? '').toString(),
                 scientificName: (row['scientific_name'] ?? '').toString(),
+                classification: (row['classification'] as String?)?.trim().isNotEmpty ==
+                        true
+                    ? (row['classification'] as String).trim()
+                    : null,
               ))
           .toList();
 

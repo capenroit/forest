@@ -175,7 +175,9 @@ class _SeedForForestRecentActivityPageState
 
     final headerRow = await _supabase
         .from('seed_donation')
-        .select('id, donor_name, donated_date, total_count, details, status, is_converted')
+        .select(
+          'id, donor_name, donated_date, total_count, details, status, is_converted, survive',
+        )
         .eq('id', donationId)
         .maybeSingle();
 
@@ -216,6 +218,7 @@ class _SeedForForestRecentActivityPageState
       remarks: (headerRow['details'] ?? '').toString(),
       status: (headerRow['status'] ?? 'DONATED').toString(),
       isConverted: (headerRow['is_converted'] as bool?) ?? false,
+      survive: (headerRow['survive'] as num?)?.toInt(),
     );
   }
 
@@ -694,7 +697,9 @@ class _SeedForForestRecentActivityPageState
   Future<List<SeedForForestEntry>> _loadRecentActivities() async {
     final response = await _supabase
         .from('seed_donation')
-        .select('id, donor_name, donated_date, total_count, details, created_at, status, is_converted')
+        .select(
+          'id, donor_name, donated_date, total_count, details, created_at, status, is_converted, survive',
+        )
         .order('donated_date', ascending: false)
         .order('created_at', ascending: false)
         .limit(100);
@@ -715,6 +720,7 @@ class _SeedForForestRecentActivityPageState
             remarks: (data['details'] ?? '').toString(),
             status: (data['status'] ?? 'DONATED').toString(),
             isConverted: (data['is_converted'] as bool?) ?? false,
+            survive: (data['survive'] as num?)?.toInt(),
           );
         })
         .toList();
@@ -794,6 +800,17 @@ class _RecentActivityCard extends StatelessWidget {
                         valueColor: const Color(0xFF1B8B5E),
                       ),
                     ),
+                    if (isPlantable) ...[
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: _RowColumn(
+                          label: 'Survive',
+                          value: (activity.survive ?? 0).toString(),
+                          valueColor: const Color(0xFF1976D2),
+                        ),
+                      ),
+                    ],
                     const SizedBox(width: 8),
                     PopupMenuButton<String>(
                       tooltip: 'Actions',

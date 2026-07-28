@@ -239,6 +239,48 @@ class LookupService {
     }
   }
 
+  static Future<List<LookupOption>> getFloraClassificationOptions() async {
+    try {
+      final response = await _supabase
+          .from('flora_classification')
+          .select('id, name')
+          .order('name', ascending: true);
+
+      return (response as List<dynamic>)
+          .map(
+            (row) => LookupOption(
+              id: (row['id'] as num).toInt(),
+              name: (row['name'] as String).trim(),
+            ),
+          )
+          .where((option) => option.name.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const <LookupOption>[];
+    }
+  }
+
+  static Future<List<LookupOption>> getFaunaClassificationOptions() async {
+    try {
+      final response = await _supabase
+          .from('fauna_classification')
+          .select('id, name')
+          .order('name', ascending: true);
+
+      return (response as List<dynamic>)
+          .map(
+            (row) => LookupOption(
+              id: (row['id'] as num).toInt(),
+              name: (row['name'] as String).trim(),
+            ),
+          )
+          .where((option) => option.name.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const <LookupOption>[];
+    }
+  }
+
   static Future<List<LookupOption>> getBarangayOptionsByMunicipalityId(
     int municipalityId, {
     bool refresh = false,

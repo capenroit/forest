@@ -1025,12 +1025,16 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
       throw Exception('Enter a Plantable quantity for at least one seedling.');
     }
 
+    final totalSurvive = row.seedDetails
+        .fold<int>(0, (sum, detail) => sum + _plantableValue(detail));
+
     await supabase.from('seedling_transaction').insert(rows);
 
-    await supabase
-        .from('seed_donation')
-        .update({'status': 'PLANTABLE', 'is_converted': true}).eq(
-            'id', row.donation.id);
+    await supabase.from('seed_donation').update({
+      'status': 'PLANTABLE',
+      'is_converted': true,
+      'survive': totalSurvive,
+    }).eq('id', row.donation.id);
   }
 
   Future<void> _showPropagatedDonationsDialog({

@@ -21,6 +21,7 @@ class SeedForForestEntry {
   final String remarks;
   final String status;
   final bool isConverted;
+  final int? survive;
 
   const SeedForForestEntry({
     this.id,
@@ -31,5 +32,6 @@ class SeedForForestEntry {
     required this.remarks,
     this.status = 'DONATED',
     this.isConverted = false,
+    this.survive,
   });
 }

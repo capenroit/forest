@@ -323,6 +323,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         flattened.add({
           ...row,
           'species_type': speciesRow['species_type'],
+          'classification': speciesRow['classification'],
           'species_name': speciesRow['name'],
         });
       }
@@ -1268,6 +1269,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           'id',
           'activity_name',
           'species_type',
+          'classification',
           'species_name',
           'area',
           'municipality',
@@ -1306,6 +1308,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           'donor_name',
           'seed_species_name',
           'seed_count',
+          'survive',
           'status',
           'donated_date',
         ];
@@ -1338,6 +1341,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       'activity_name': 'Activity Name',
       'tree_species': 'Species',
       'species_type': 'Type',
+      'classification': 'Classification',
       'species_name': 'Species',
       'species': 'Species',
       'number_of_trees': 'Number of Trees',
@@ -1359,6 +1363,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
       'donor_name': 'Donor Name',
       'seed_species_name': 'Species Name',
       'seed_count': 'Quantity',
+      'survive': 'Survive',
       'status': 'Status',
       'donated_date': 'Date',
     };
@@ -1378,6 +1383,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 0.16;
       case 'tree_species':
       case 'species_type':
+      case 'classification':
       case 'species_name':
       case 'species':
       case 'seed_species_name':
@@ -1394,6 +1400,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 0.14;
       case 'number_of_trees':
       case 'number_tree_survived':
+      case 'survive':
         return 0.12;
       case 'quarter_label':
         return 0.08;

@@ -207,7 +207,9 @@ class ApiService {
     try {
       final data = await _client
           .from('flora_fauna_survey_data')
-          .select('id, flora_fauna_id, name, scientific_name, species_type')
+          .select(
+            'id, flora_fauna_id, name, scientific_name, species_type, classification',
+          )
           .eq('flora_fauna_id', floraFaunaSurveyId);
 
       return (data as List<dynamic>)
@@ -233,7 +235,9 @@ class ApiService {
     try {
       final data = await _client
           .from('flora_fauna_survey_data')
-          .select('id, flora_fauna_id, name, scientific_name, species_type')
+          .select(
+            'id, flora_fauna_id, name, scientific_name, species_type, classification',
+          )
           .inFilter('flora_fauna_id', uniqueIds);
 
       final result = <int, List<Map<String, dynamic>>>{};
@@ -268,11 +272,13 @@ class ApiService {
       if (rows.isEmpty) return;
 
       final payload = rows.map((row) {
+        final classification = row['classification'];
         return {
           'flora_fauna_id': floraFaunaSurveyId,
           'name': (row['name'] ?? '').toString().trim(),
           'scientific_name': (row['scientific_name'] ?? '').toString().trim(),
           'species_type': (row['species_type'] ?? '').toString().trim(),
+          'classification': classification?.toString().trim(),
         };
       }).where((row) {
         final name = (row['name'] ?? '').toString();
