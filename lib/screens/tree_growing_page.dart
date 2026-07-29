@@ -166,10 +166,10 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
     final planting = item.planting;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(12),
         boxShadow: const [
           BoxShadow(
             color: Color(0x11000000),
@@ -282,7 +282,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
-            fontSize: 18,
+            fontSize: 14,
             height: 1.2,
             fontWeight: FontWeight.w700,
             color: Color(0xFF25273B),
@@ -308,12 +308,12 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
         Row(
           children: [
             const Icon(Icons.calendar_today_rounded,
-                size: 16, color: Color(0xFF9B9DAE)),
+                size: 14, color: Color(0xFF9B9DAE)),
             const SizedBox(width: 6),
             Text(
               _formatDate(date),
               style: const TextStyle(
-                fontSize: 29,
+                fontSize: 14,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF666A80),
                 height: 1,
@@ -341,7 +341,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
         Text(
           '$treesCount',
           style: const TextStyle(
-            fontSize: 33,
+            fontSize: 18,
             height: 1,
             fontWeight: FontWeight.w700,
             color: Color(0xFF22232F),

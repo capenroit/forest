@@ -34,7 +34,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Future<Widget> _loadInitialScreen() async {
     try {
       final session = Supabase.instance.client.auth.currentSession;
-      
+
       if (session != null) {
         // Session exists, load user profile
         await _loadUserProfile(session.user.id);
@@ -43,7 +43,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     } catch (e) {
       // Error loading profile, show login
     }
-    
+
     return const LoginScreen();
   }
 
@@ -108,11 +108,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               body: Center(child: CircularProgressIndicator()),
             );
           }
-          
+
           if (snapshot.hasError) {
             return const LoginScreen();
           }
-          
+
           return snapshot.data ?? const LoginScreen();
         },
       ),
@@ -122,14 +122,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Widget _buildHome() {
     // Check if there's an active Supabase session
     final session = Supabase.instance.client.auth.currentSession;
-    
+
     if (session != null) {
       // User is logged in, show HomeScreen
       return const HomeScreen();
     }
-    
+
     // No session, show login
     return const LoginScreen();
   }
 }
-

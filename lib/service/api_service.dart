@@ -1270,5 +1270,171 @@ class ApiService {
     final dLng = lng2 - lng1;
     return sqrt(dLat * dLat + dLng * dLng);
   }
+
+  // ===== HABITAT ASSESSMENT ENDPOINTS =====
+
+  /// activity_type_id used when tagging photourl_area rows for this feature.
+  static const int habitatAssessmentActivityTypeId = 8;
+
+  /// Save a new habitat assessment record.
+  static Future<Map<String, dynamic>> saveHabitatAssessment({
+    required int userId,
+    required String municipality,
+    required String barangay,
+    required String typeAssessment,
+    double? area,
+  }) async {
+    try {
+      final payload = {
+        'userid': userId,
+        'municipality': municipality,
+        'barangay': barangay,
+        'type_assessment': typeAssessment,
+        'area': area,
+      };
+
+      final response = await _client
+          .from('crm_habitat_assssment')
+          .insert(payload)
+          .select()
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error saving habitat assessment: $e');
+    }
+  }
+
+  /// Save per-species rows for a habitat assessment record.
+  static Future<void> saveHabitatAssessmentDataRows({
+    required int assessmentId,
+    required List<Map<String, dynamic>> speciesRows,
+  }) async {
+    if (speciesRows.isEmpty) return;
+
+    try {
+      final payload = speciesRows.map((row) {
+        return {
+          'assssment_id': assessmentId,
+          'species_name': row['species_name'],
+          'count': row['count'],
+        };
+      }).toList();
+
+      await _client.from('crm_habitat_assssment_data').insert(payload);
+    } catch (e) {
+      throw Exception('Error saving habitat_assessment_data rows: $e');
+    }
+  }
+
+  /// Get all habitat assessment records, most recent first.
+  static Future<List<HabitatAssessment>> getAllHabitatAssessments(
+      {int limit = 200}) async {
+    try {
+      final data = await _client
+          .from('crm_habitat_assssment')
+          .select()
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+      return (data as List)
+          .map((row) => HabitatAssessment.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw Exception('Error fetching habitat assessments: $e');
+    }
+  }
+
+  /// Fetch species rows grouped by assessment id.
+  static Future<Map<int, List<Map<String, dynamic>>>>
+      getHabitatAssessmentDataByAssessmentIds(List<int> assessmentIds) async {
+    if (assessmentIds.isEmpty) return <int, List<Map<String, dynamic>>>{};
+
+    final uniqueIds = assessmentIds.toSet().toList()..sort();
+
+    try {
+      final groupedRows = await Future.wait(
+        uniqueIds.map((assessmentId) async {
+          final data = await _client
+              .from('crm_habitat_assssment_data')
+              .select('id, assssment_id, species_name, count')
+              .eq('assssment_id', assessmentId);
+
+          return List<Map<String, dynamic>>.from(data as List<dynamic>);
+        }),
+      );
+
+      final result = <int, List<Map<String, dynamic>>>{};
+
+      for (final rows in groupedRows) {
+        for (final row in rows) {
+          final assessmentId = (row['assssment_id'] as num?)?.toInt();
+          if (assessmentId == null) continue;
+
+          result.putIfAbsent(assessmentId, () => <Map<String, dynamic>>[]);
+          result[assessmentId]!.add(row);
+        }
+      }
+
+      return result;
+    } catch (e) {
+      throw Exception('Error fetching habitat_assessment_data rows: $e');
+    }
+  }
+
+  // ===== MARINE PROTECTED AREA ENDPOINTS =====
+
+  /// activity_type_id used when tagging photourl_area rows for this feature.
+  static const int marineProtectedAreaActivityTypeId = 9;
+
+  /// Save a new marine protected area record.
+  static Future<Map<String, dynamic>> saveMarineProtectedArea({
+    required int userId,
+    required String name,
+    required String municipality,
+    required String barangay,
+    double? area,
+    String? ordinance,
+  }) async {
+    try {
+      final payload = {
+        'userid': userId,
+        'name': name,
+        'municipality': municipality,
+        'barangay': barangay,
+        'area': area,
+        'ordinance': ordinance,
+      };
+
+      final response = await _client
+          .from('crm_marine_protected')
+          .insert(payload)
+          .select()
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error saving marine protected area: $e');
+    }
+  }
+
+  /// Get all marine protected area records, most recent first.
+  static Future<List<MarineProtectedArea>> getAllMarineProtectedAreas(
+      {int limit = 200}) async {
+    try {
+      final data = await _client
+          .from('crm_marine_protected')
+          .select()
+          .order('created_at', ascending: false)
+          .limit(limit);
+
+      return (data as List)
+          .map((row) =>
+              MarineProtectedArea.fromJson(row as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      throw Exception('Error fetching marine protected areas: $e');
+    }
+  }
 }
 

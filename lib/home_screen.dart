@@ -4,7 +4,10 @@ import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/dashboard_page.dart';
 import 'screens/capiz_flora_fauna_recent_activity_page.dart';
+import 'screens/coastal_dashboard_page.dart';
+import 'screens/habitat_assessment_page.dart';
 import 'screens/login_screen.dart';
+import 'screens/marine_protected_area_page.dart';
 import 'screens/report_page.dart';
 import 'screens/seed_for_forest_recent_activity_page.dart';
 import 'screens/seedling_inventory_page.dart';
@@ -168,7 +171,7 @@ class _SidePanelState extends State<SidePanel> {
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Text(
-                      "MAIN MENU",
+                      "FOREST MANAGEMENT",
                       style: TextStyle(
                         color: Colors.white70,
                         fontSize: 14,
@@ -177,8 +180,7 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     ),
                   ),
-                  _buildNavItem(Icons.dashboard, "Forest Management Dashboard",
-                      () {
+                  _buildNavItem(Icons.dashboard, "Dashboard", () {
                     Navigator.pop(context);
                   }),
                   _buildNavItem(Icons.nature, "Tree Growing Activity", () {
@@ -209,7 +211,8 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     );
                   }),
-                  _buildNavItem(Icons.inventory, "Available Seedling Inventory", () {
+                  _buildNavItem(Icons.inventory, "Available Seedling Inventory",
+                      () {
                     Navigator.pop(context);
                     Navigator.push(
                       context,
@@ -218,7 +221,8 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     );
                   }),
-                  _buildNavItem(Icons.assignment_outlined, "Seedling Request", () {
+                  _buildNavItem(Icons.assignment_outlined, "Seedling Request",
+                      () {
                     Navigator.pop(context);
                     Navigator.push(
                       context,
@@ -243,6 +247,49 @@ class _SidePanelState extends State<SidePanel> {
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Text(
+                      "COASTAL MANAGEMENT",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  _buildNavItem(Icons.dashboard, "Dashboard", () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const CoastalDashboardPage(),
+                      ),
+                    );
+                  }),
+                  _buildNavItem(Icons.waves, "Habitat Assessment", () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const HabitatAssessmentPage(),
+                      ),
+                    );
+                  }),
+                  _buildNavItem(Icons.sailing, "Marine Protected Area", () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const MarineProtectedAreaPage(),
+                      ),
+                    );
+                  }),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Divider(color: Colors.white30),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Text(
                       "REPORTS & ANALYTICS",
                       style: TextStyle(
                         color: Colors.white70,
@@ -256,7 +303,9 @@ class _SidePanelState extends State<SidePanel> {
                     Navigator.pop(context);
                     Navigator.push(
                       context,
-                      MaterialPageRoute(builder: (_) => const ReportPage(),),
+                      MaterialPageRoute(
+                        builder: (_) => const ReportPage(),
+                      ),
                     );
                   }),
                 ],
@@ -370,4 +419,3 @@ class _SidePanelState extends State<SidePanel> {
     );
   }
 }
-

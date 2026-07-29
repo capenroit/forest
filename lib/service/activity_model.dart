@@ -164,6 +164,74 @@ class TreePlantingArea {
   }
 }
 
+class HabitatAssessment {
+  final int? id;
+  final int userid;
+  final String municipality;
+  final String barangay;
+  final String typeAssessment;
+  final double? area;
+  final DateTime date;
+
+  HabitatAssessment({
+    this.id,
+    required this.userid,
+    required this.municipality,
+    required this.barangay,
+    required this.typeAssessment,
+    this.area,
+    required this.date,
+  });
+
+  factory HabitatAssessment.fromJson(Map<String, dynamic> json) {
+    return HabitatAssessment(
+      id: (json['id'] as num?)?.toInt(),
+      userid: (json['userid'] as num?)?.toInt() ?? 0,
+      municipality: json['municipality'] as String? ?? '',
+      barangay: json['barangay'] as String? ?? '',
+      typeAssessment: json['type_assessment'] as String? ?? '',
+      area: (json['area'] as num?)?.toDouble(),
+      date: json['created_at'] != null
+          ? DateTime.parse(json['created_at'] as String)
+          : DateTime.now(),
+    );
+  }
+}
+
+class MarineProtectedArea {
+  final int? id;
+  final String name;
+  final String municipality;
+  final String barangay;
+  final double? area;
+  final String? ordinance;
+  final DateTime date;
+
+  MarineProtectedArea({
+    this.id,
+    required this.name,
+    required this.municipality,
+    required this.barangay,
+    this.area,
+    this.ordinance,
+    required this.date,
+  });
+
+  factory MarineProtectedArea.fromJson(Map<String, dynamic> json) {
+    return MarineProtectedArea(
+      id: (json['id'] as num?)?.toInt(),
+      name: json['name'] as String? ?? '',
+      municipality: json['municipality'] as String? ?? '',
+      barangay: json['barangay'] as String? ?? '',
+      area: (json['area'] as num?)?.toDouble(),
+      ordinance: json['ordinance'] as String?,
+      date: json['created_at'] != null
+          ? DateTime.parse(json['created_at'] as String)
+          : DateTime.now(),
+    );
+  }
+}
+
 /// Legacy PlantingArea model (for backwards compatibility)
 class PlantingArea {
   final String? id;
