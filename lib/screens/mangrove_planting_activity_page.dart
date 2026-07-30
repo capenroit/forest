@@ -1,24 +1,24 @@
 import 'package:flutter/material.dart';
 
-import '../data_entry/tree_growing_form.dart';
+import '../data_entry/mangrove_planting_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../widget/activity_photos_dialog.dart';
-import 'tree_growing_edit_page.dart';
+import 'mangrove_planting_edit_page.dart';
 
-class TreeGrowingPage extends StatefulWidget {
-  const TreeGrowingPage({super.key});
+class MangrovePlantingActivityPage extends StatefulWidget {
+  const MangrovePlantingActivityPage({super.key});
 
   @override
-  State<TreeGrowingPage> createState() => _TreeGrowingPageState();
+  State<MangrovePlantingActivityPage> createState() => _MangrovePlantingActivityPageState();
 }
 
-class _TreeGrowingActivityItem {
+class _MangrovePlantingActivityItem {
   final TreePlanting planting;
   final String species;
   final int treesCount;
 
-  const _TreeGrowingActivityItem({
+  const _MangrovePlantingActivityItem({
     required this.planting,
     required this.species,
     required this.treesCount,
@@ -27,8 +27,8 @@ class _TreeGrowingActivityItem {
 
 enum _ActivityCardMenuAction { photos, edit, delete }
 
-class _TreeGrowingPageState extends State<TreeGrowingPage> {
-  final List<_TreeGrowingActivityItem> _items = [];
+class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityPage> {
+  final List<_MangrovePlantingActivityItem> _items = [];
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -50,10 +50,10 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
         iconTheme: const IconThemeData(color: Colors.white),
         title: Row(
           children: const [
-            Icon(Icons.park_rounded, color: Colors.white, size: 32),
+            Icon(Icons.forest, color: Colors.white, size: 32),
             SizedBox(width: 12),
             Text(
-              'Tree Planting Activity',
+              'Mangrove Planting Activity',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -114,7 +114,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
     );
   }
 
-  Widget _buildBody(List<_TreeGrowingActivityItem> visibleItems) {
+  Widget _buildBody(List<_MangrovePlantingActivityItem> visibleItems) {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -145,7 +145,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
     if (visibleItems.isEmpty) {
       return const Center(
         child: Text(
-          'No tree planting activities yet.',
+          'No mangrove planting activities yet.',
           style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
         ),
       );
@@ -163,7 +163,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
     );
   }
 
-  Widget _buildActivityCard(_TreeGrowingActivityItem item) {
+  Widget _buildActivityCard(_MangrovePlantingActivityItem item) {
     final planting = item.planting;
 
     return Container(
@@ -368,18 +368,18 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
     }
 
     try {
-      final plantings = await ApiService.getTreePlantingsByProjectTypeId(1, limit: 200);
+      final plantings = await ApiService.getTreePlantingsByProjectTypeId(6, limit: 200);
       final seqIds = plantings
           .map((planting) => planting.seqId)
           .whereType<int>()
           .where((id) => id > 0)
           .toList();
 
-      final dataByTreeGrowingId =
+      final dataByMangrovePlantingId =
           await ApiService.getTreeGrowingDataByTreeGrowingIds(seqIds);
 
       final mapped = plantings.map((planting) {
-        final rows = dataByTreeGrowingId[planting.seqId ?? -1] ?? const [];
+        final rows = dataByMangrovePlantingId[planting.seqId ?? -1] ?? const [];
 
         final speciesFromRows = rows
             .map((row) => (row['seed_name'] ?? '').toString().trim())
@@ -396,7 +396,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
 
         final treesCount = treesFromRows > 0 ? treesFromRows : planting.numberOfTrees;
 
-        return _TreeGrowingActivityItem(
+        return _MangrovePlantingActivityItem(
           planting: planting,
           species: species,
           treesCount: treesCount,
@@ -436,7 +436,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
           borderRadius: BorderRadius.circular(12),
         ),
         insetPadding: const EdgeInsets.all(16),
-        child: TreeGrowingForm(
+        child: MangrovePlantingForm(
           municipalities: const [],
           barangays: const [],
           onSave: (_) {
@@ -462,7 +462,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
 
     await showActivityPhotosDialog(
       context: context,
-      title: 'Photos — ${(activity.activityName ?? '').trim().isEmpty ? 'Tree Planting Activity' : activity.activityName!.trim()}',
+      title: 'Photos — ${(activity.activityName ?? '').trim().isEmpty ? 'Mangrove Planting Activity' : activity.activityName!.trim()}',
       loadPhotos: () => _loadPhotosForActivity(seqId),
     );
   }
@@ -471,7 +471,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
     final photos = <ActivityPhoto>[];
 
     final photoRows = await ApiService.getPhotosForActivity(
-      projectTypeId: 1,
+      projectTypeId: 6,
       activityId: seqId,
     );
     for (final row in photoRows) {
@@ -482,15 +482,6 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
         url: url,
         name: (name != null && name.isNotEmpty) ? name : _photoFileName(url),
       ));
-    }
-
-    // Legacy points captured before the migration to the location/photo
-    // tables still keep their photo inline on photourl_area.
-    final legacyRows = await ApiService.getPhotourlAreasByActivityId(seqId);
-    for (final row in legacyRows) {
-      final url = (row['photo_url'] ?? '').toString();
-      if (url.isEmpty) continue;
-      photos.add(ActivityPhoto(url: url, name: _photoFileName(url)));
     }
 
     return photos;
@@ -507,7 +498,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
         opaque: false,
         transitionDuration: const Duration(milliseconds: 180),
         reverseTransitionDuration: const Duration(milliseconds: 140),
-        pageBuilder: (_, __, ___) => TreeGrowingEditPage(initialData: activity),
+        pageBuilder: (_, __, ___) => MangrovePlantingEditPage(initialData: activity),
         transitionsBuilder: (_, animation, __, child) {
           return FadeTransition(
             opacity: CurvedAnimation(
@@ -529,7 +520,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
 
       if (index != -1) {
         final existing = _items[index];
-        _items[index] = _TreeGrowingActivityItem(
+        _items[index] = _MangrovePlantingActivityItem(
           planting: updatedTreePlanting,
           species: existing.species,
           treesCount: updatedTreePlanting.numberOfTrees > 0

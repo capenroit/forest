@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data_entry/flora_fauna_form.dart';
 import '../service/api_service.dart';
+import '../widget/activity_photos_dialog.dart';
 
 class CapizFloraFaunaRecentActivityPage extends StatefulWidget {
   const CapizFloraFaunaRecentActivityPage({super.key});
@@ -126,6 +127,47 @@ class _CapizFloraFaunaRecentActivityPageState
         ),
       );
     }
+  }
+
+  Future<void> _viewPhotos(FloraFaunaEntry activity) async {
+    final surveyId = activity.id;
+    if (surveyId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No photos available for this activity.')),
+      );
+      return;
+    }
+
+    await showActivityPhotosDialog(
+      context: context,
+      title: 'Photos — ${(activity.activityName ?? '').trim().isEmpty ? 'Survey Record' : activity.activityName!.trim()}',
+      loadPhotos: () => _loadPhotosForActivity(surveyId),
+    );
+  }
+
+  Future<List<ActivityPhoto>> _loadPhotosForActivity(int surveyId) async {
+    final photos = <ActivityPhoto>[];
+
+    final photoRows = await ApiService.getPhotosForActivity(
+      projectTypeId: 3,
+      activityId: surveyId,
+    );
+    for (final row in photoRows) {
+      final url = (row['photo_url'] ?? '').toString();
+      if (url.isEmpty) continue;
+      final name = (row['name'] as String?)?.trim();
+      photos.add(ActivityPhoto(
+        url: url,
+        name: (name != null && name.isNotEmpty) ? name : _photoFileName(url),
+      ));
+    }
+
+    return photos;
+  }
+
+  String _photoFileName(String url) {
+    final base = url.split('/').last;
+    return base.isNotEmpty ? base : 'photo.jpg';
   }
 
   Future<void> _openAddDialog({FloraFaunaEntry? initialEntry, int? index}) async {
@@ -368,6 +410,7 @@ class _CapizFloraFaunaRecentActivityPageState
                                   final activity = _recentActivities[index];
                                   return _RecentActivityCard(
                                     activity: activity,
+                                    onPhotos: () => _viewPhotos(activity),
                                     onEdit: () => _editActivity(activity, index),
                                     onRemove: () => _confirmRemove(index),
                                   );
@@ -407,14 +450,17 @@ class _CapizFloraFaunaRecentActivityPageState
 class _RecentActivityCard extends StatelessWidget {
   const _RecentActivityCard({
     required this.activity,
+    required this.onPhotos,
     required this.onEdit,
     required this.onRemove,
   });
 
   final FloraFaunaEntry activity;
+  final VoidCallback onPhotos;
   final VoidCallback onEdit;
   final VoidCallback onRemove;
 
+  static const _menuPhotos = 'photos';
   static const _menuEdit = 'edit';
   static const _menuRemove = 'remove';
 
@@ -478,13 +524,25 @@ class _RecentActivityCard extends StatelessWidget {
                       color: Color(0xFF6B7280),
                     ),
                     onSelected: (value) {
-                      if (value == _menuEdit) {
+                      if (value == _menuPhotos) {
+                        onPhotos();
+                      } else if (value == _menuEdit) {
                         onEdit();
                       } else if (value == _menuRemove) {
                         onRemove();
                       }
                     },
                     itemBuilder: (context) => const [
+                      PopupMenuItem<String>(
+                        value: _menuPhotos,
+                        child: Row(
+                          children: [
+                            Icon(Icons.photo_library_outlined, size: 18),
+                            SizedBox(width: 10),
+                            Text('Photos'),
+                          ],
+                        ),
+                      ),
                       PopupMenuItem<String>(
                         value: _menuEdit,
                         child: Row(

@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'activity_model.dart';
 
@@ -314,6 +315,52 @@ class ApiService {
     } catch (e) {
       throw Exception('Error creating photo row: $e');
     }
+  }
+
+  /// Storage bucket shared by all activity photo uploads (Tree Growing,
+  /// Flora & Fauna, Mangrove Planting, Habitat Assessment, Marine Protected
+  /// Area).
+  static const String activityPhotoStorageBucket = 'Forest Management';
+
+  /// Fetch photo rows attached to an activity (photo.project_type_id +
+  /// photo.activity_id).
+  static Future<List<Map<String, dynamic>>> getPhotosForActivity({
+    required int projectTypeId,
+    required int activityId,
+  }) async {
+    try {
+      final data = await _client
+          .from('photo')
+          .select('id, name, photo_url')
+          .eq('project_type_id', projectTypeId)
+          .eq('activity_id', activityId);
+
+      return List<Map<String, dynamic>>.from(data as List);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// The value stored in `photo_url` / `photourl_area.photo_url` is not a
+  /// real HTTP URL — it's `public/<encodedBucket>/<objectPath>` (see the
+  /// upload helpers in the data-entry forms). This resolves it back to the
+  /// real object path inside [activityPhotoStorageBucket] so it can be
+  /// downloaded from Supabase Storage.
+  static String _resolveStorageObjectPath(String storedPhotoUrl) {
+    final prefix =
+        'public/${Uri.encodeComponent(activityPhotoStorageBucket)}/';
+    return storedPhotoUrl.startsWith(prefix)
+        ? storedPhotoUrl.substring(prefix.length)
+        : storedPhotoUrl;
+  }
+
+  /// Download the raw bytes of a stored activity photo from Supabase
+  /// Storage.
+  static Future<Uint8List> downloadActivityPhoto(String storedPhotoUrl) async {
+    final objectPath = _resolveStorageObjectPath(storedPhotoUrl);
+    return await _client.storage
+        .from(activityPhotoStorageBucket)
+        .download(objectPath);
   }
 
   /// Save captured coordinates to location table.
@@ -1434,6 +1481,111 @@ class ApiService {
           .toList();
     } catch (e) {
       throw Exception('Error fetching marine protected areas: $e');
+    }
+  }
+
+  // ===== MANGROVE LIST ENDPOINTS =====
+
+  /// Returns mangrove species names for the Mangrove Planting Activity
+  /// Seedling Details dropdown.
+  static Future<List<String>> getMangroveSpeciesNames() async {
+    try {
+      final response =
+          await _client.from('mangrove_list').select('name').order('name');
+
+      final seen = <String>{};
+      final names = <String>[];
+
+      for (final row in response as List) {
+        final name = ((row as Map)['name'] ?? '').toString().trim();
+        if (name.isEmpty) continue;
+
+        final key = name.toLowerCase();
+        if (seen.add(key)) names.add(name);
+      }
+
+      return names;
+    } catch (e) {
+      return const <String>[];
+    }
+  }
+
+  // ===== LOCATION ENDPOINTS (per-row CRUD) =====
+  //
+  // saveLocationRowsForActivity (above) does a batch insert with no
+  // returned ids, which is fine for flows that never revisit a record.
+  // These per-row variants exist for flows (Tree Growing, Mangrove
+  // Planting) that need to edit/delete individual points later, mirroring
+  // the photourl_area CRUD methods above.
+
+  /// Create a single location row and return it (so its id can be tracked
+  /// for later point-level edit/delete).
+  static Future<Map<String, dynamic>> createLocationRow({
+    required int activityId,
+    required int activityTypeId,
+    required double latitude,
+    required double longitude,
+  }) async {
+    try {
+      final data = {
+        'activity_id': activityId,
+        'activity_type_id': activityTypeId,
+        'latitude': latitude,
+        'longitude': longitude,
+        'isDeleted': 0,
+      };
+
+      final response =
+          await _client.from('location').insert(data).select().single();
+      return response;
+    } catch (e) {
+      throw Exception('Error creating location row: $e');
+    }
+  }
+
+  /// Update coordinates for an existing location row.
+  static Future<void> updateLocationRowCoordinates({
+    required int locationId,
+    required double latitude,
+    required double longitude,
+  }) async {
+    try {
+      await _client.from('location').update({
+        'latitude': latitude,
+        'longitude': longitude,
+      }).eq('id', locationId);
+    } catch (e) {
+      throw Exception('Error updating location row: $e');
+    }
+  }
+
+  /// Mark a location row as deleted (soft delete via isDeleted flag).
+  static Future<void> deleteLocationRow(int locationId) async {
+    try {
+      await _client
+          .from('location')
+          .update({'isDeleted': 1}).eq('id', locationId);
+    } catch (e) {
+      throw Exception('Error deleting location row: $e');
+    }
+  }
+
+  /// Get all (non-deleted) location rows for a specific activity.
+  static Future<List<Map<String, dynamic>>> getLocationRowsByActivity({
+    required int activityTypeId,
+    required int activityId,
+  }) async {
+    try {
+      final data = await _client
+          .from('location')
+          .select()
+          .eq('activity_type_id', activityTypeId)
+          .eq('activity_id', activityId)
+          .eq('isDeleted', 0);
+
+      return List<Map<String, dynamic>>.from(data as List);
+    } catch (e) {
+      return [];
     }
   }
 }

@@ -386,40 +386,30 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       final areaId = (savedArea['id'] as num?)?.toInt();
 
       if (areaId != null && _capturedCoordinates.isNotEmpty) {
-        for (final coord in _capturedCoordinates) {
-          final latitude = (coord['lat'] as num?)?.toDouble();
-          final longitude = (coord['lng'] as num?)?.toDouble();
-          if (latitude == null || longitude == null) continue;
+        await ApiService.saveLocationRowsForActivity(
+          activityId: areaId,
+          coordinates: _capturedCoordinates,
+          activityTypeId: ApiService.marineProtectedAreaActivityTypeId,
+        );
 
-          final createdArea = await ApiService.createPhotourlArea(
-            latitude: latitude,
-            longitude: longitude,
-            photoUrl: null,
-            activityId: areaId,
-            activityTypeId: ApiService.marineProtectedAreaActivityTypeId,
+        for (final coord in _capturedCoordinates) {
+          final photoPath = coord['photoPath'] as String?;
+          if (photoPath == null || photoPath.isEmpty) continue;
+
+          final extension = _extractFileExtension(photoPath);
+          final photoName =
+              'photo_marine_${ApiService.marineProtectedAreaActivityTypeId}_${areaId}_${DateTime.now().millisecondsSinceEpoch}${extension.isEmpty ? '.jpg' : extension}';
+
+          final supabasePhotoUrl = await _uploadMarineProtectedAreaPhotoToSupabase(
+            localPath: photoPath,
+            photoName: photoName,
           );
 
-          final photourlAreaId = createdArea['id']?.toString();
-          final photoPath = coord['photoPath'] as String?;
-
-          if (photourlAreaId != null &&
-              photoPath != null &&
-              photoPath.isNotEmpty) {
-            final extension = _extractFileExtension(photoPath);
-            final photoName =
-                'photo_marine_${ApiService.marineProtectedAreaActivityTypeId}_${areaId}_${DateTime.now().millisecondsSinceEpoch}${extension.isEmpty ? '.jpg' : extension}';
-
-            final supabasePhotoUrl = await _uploadMarineProtectedAreaPhotoToSupabase(
-              localPath: photoPath,
-              photoName: photoName,
-            );
-
-            await ApiService.updatePhotourlAreaPhotoUrl(
-              photourlAreaId: photourlAreaId,
-              photoUrl: supabasePhotoUrl,
-              photoName: photoName,
-            );
-          }
+          await ApiService.createPhotoRow(
+            projectTypeId: ApiService.marineProtectedAreaActivityTypeId,
+            activityId: areaId,
+            photoUrl: supabasePhotoUrl,
+          );
         }
       }
 

@@ -13,7 +13,6 @@ import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
 import '../service/offline_sync_service.dart';
-import '../service/seedling_list_service.dart';
 import '../widget/add_seed_dialog.dart';
 import '../widget/edit_coordinate_dialog.dart';
 import '../../service/activity_model.dart';
@@ -26,14 +25,14 @@ class SeedlingEntry {
   SeedlingEntry({required this.seedlingType, required this.quantity});
 }
 
-class TreeGrowingForm extends StatefulWidget {
+class MangrovePlantingForm extends StatefulWidget {
   final List<String> municipalities;
   final List<String> barangays;
   final ValueChanged<TreePlanting> onSave;
   final VoidCallback onCancel;
   final TreePlanting? initialData;
 
-  const TreeGrowingForm({
+  const MangrovePlantingForm({
     Key? key,
     required this.municipalities,
     required this.barangays,
@@ -43,14 +42,13 @@ class TreeGrowingForm extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<TreeGrowingForm> createState() => _TreeGrowingFormState();
+  State<MangrovePlantingForm> createState() => _MangrovePlantingFormState();
 }
 
-class _TreeGrowingFormState extends State<TreeGrowingForm> {
-  static const int _treeGrowingActivityTypeId = 1;
+class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
+  static const int _mangrovePlantingActivityTypeId = 6;
   // Supabase bucket id used by this app project.
   static const String _storageBucketName = 'Forest Management';
-  final SeedlingListService seedlingListService = SeedlingListService();
   late TextEditingController _activityNameController;
   late TextEditingController _barangayController;
   late TextEditingController _detailsController;
@@ -133,7 +131,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
     super.dispose();
   }
 
-  String _buildTreeGrowingPhotoName({
+  String _buildMangrovePlantingPhotoName({
     required int divisionTypeId,
     required int activityId,
     required int photoId,
@@ -141,7 +139,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
   }) {
     final extension = _extractFileExtension(sourcePath);
     final fallbackExtension = extension.isEmpty ? '.jpg' : extension;
-    return 'photo_000_${divisionTypeId}_${_treeGrowingActivityTypeId}_${activityId}_$photoId$fallbackExtension';
+    return 'photo_000_${divisionTypeId}_${_mangrovePlantingActivityTypeId}_${activityId}_$photoId$fallbackExtension';
   }
 
   int _resolveDivisionTypeId() {
@@ -159,7 +157,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
     }
   }
 
-  Future<String> _uploadTreeGrowingPhotoToSupabase({
+  Future<String> _uploadMangrovePlantingPhotoToSupabase({
     required String localPath,
     required String photoName,
   }) async {
@@ -168,7 +166,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
       throw Exception('Photo file does not exist: $localPath');
     }
 
-    final objectPath = 'public/tree_growing/$photoName';
+    final objectPath = 'public/mangrove_planting/$photoName';
     final contentType = _contentTypeFromPath(photoName);
     final fileLength = await file.length();
 
@@ -264,7 +262,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
       final offlinePlanting = TreePlanting(
         id: widget.initialData?.id,
         seqId: widget.initialData?.seqId,
-        projectTypeId: 1,
+        projectTypeId: 6,
         userid: authUserId,
         activityName: activityName,
         barangay: barangay,
@@ -312,7 +310,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
       final planting = TreePlanting(
         id: widget.initialData?.id,
         seqId: widget.initialData?.seqId,
-        projectTypeId: 1,
+        projectTypeId: 6,
         userid: authUserId,
         activityName: activityName,
         barangay: barangay,
@@ -324,8 +322,8 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
         date: parsedDate,
       );
 
-      final savedTreeGrowing = await ApiService.saveTreePlanting(planting);
-      final int? activityId = (savedTreeGrowing['seq_id'] as num?)?.toInt();
+      final savedMangrovePlanting = await ApiService.saveTreePlanting(planting);
+      final int? activityId = (savedMangrovePlanting['seq_id'] as num?)?.toInt();
       final divisionTypeId = _resolveDivisionTypeId();
 
       if (activityId != null) {
@@ -357,51 +355,8 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
           if (latitude == null || longitude == null) continue;
 
           final photoPath = coord['photoPath'] as String?;
-
-          // Points loaded from the legacy photourl_area table (pre-existing
-          // records) keep using photourl_area so historical data isn't
-          // fragmented across two tables. Everything else (new captures,
-          // and points already migrated to `location` in a prior edit)
-          // uses the location/photo tables, matching the Flora & Fauna /
-          // Habitat Assessment / Marine Protected Area pattern.
-          final existingPhotourlAreaId =
-              (coord['photourlAreaId'] ?? '').toString().trim();
-          final existingSeqId = _toInt(coord['photourlAreaSeqId']);
-
-          if (existingPhotourlAreaId.isNotEmpty) {
-            await ApiService.updatePhotourlAreaCoordinates(
-              photourlAreaId: existingPhotourlAreaId,
-              latitude: latitude,
-              longitude: longitude,
-            );
-
-            if (photoPath != null && photoPath.isNotEmpty && existingSeqId != null) {
-              final photoName = _buildTreeGrowingPhotoName(
-                divisionTypeId: divisionTypeId,
-                activityId: activityId,
-                photoId: existingSeqId,
-                sourcePath: photoPath,
-              );
-
-              final supabasePhotoUrl = await _uploadTreeGrowingPhotoToSupabase(
-                localPath: photoPath,
-                photoName: photoName,
-              );
-
-              await ApiService.updatePhotourlAreaPhotoUrl(
-                photourlAreaId: existingPhotourlAreaId,
-                photoUrl: supabasePhotoUrl,
-                photoName: photoName,
-              );
-
-              coord['photoPath'] = null;
-              coord['photoUrl'] = supabasePhotoUrl;
-            }
-
-            continue;
-          }
-
           int? locationId = _toInt(coord['locationRowId']);
+
           if (locationId != null) {
             await ApiService.updateLocationRowCoordinates(
               locationId: locationId,
@@ -411,7 +366,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
           } else {
             final createdRow = await ApiService.createLocationRow(
               activityId: activityId,
-              activityTypeId: _treeGrowingActivityTypeId,
+              activityTypeId: _mangrovePlantingActivityTypeId,
               latitude: latitude,
               longitude: longitude,
             );
@@ -420,20 +375,20 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
           }
 
           if (photoPath != null && photoPath.isNotEmpty) {
-            final photoName = _buildTreeGrowingPhotoName(
+            final photoName = _buildMangrovePlantingPhotoName(
               divisionTypeId: divisionTypeId,
               activityId: activityId,
               photoId: locationId ?? DateTime.now().millisecondsSinceEpoch,
               sourcePath: photoPath,
             );
 
-            final supabasePhotoUrl = await _uploadTreeGrowingPhotoToSupabase(
+            final supabasePhotoUrl = await _uploadMangrovePlantingPhotoToSupabase(
               localPath: photoPath,
               photoName: photoName,
             );
 
             await ApiService.createPhotoRow(
-              projectTypeId: _treeGrowingActivityTypeId,
+              projectTypeId: _mangrovePlantingActivityTypeId,
               activityId: activityId,
               photoUrl: supabasePhotoUrl,
             );
@@ -453,7 +408,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
         ),
       );
 
-      widget.onSave(TreePlanting.fromJson(savedTreeGrowing));
+      widget.onSave(TreePlanting.fromJson(savedMangrovePlanting));
     } catch (e) {
       if (!mounted) return;
 
@@ -720,34 +675,12 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
     });
 
     try {
-      // Legacy points, still stored per-point in photourl_area (with an
-      // inline photo_url) from before this activity's records were
-      // migrated to the location/photo tables.
-      final areas = await ApiService.getPhotourlAreasByActivityId(seqId);
-
-      final legacyCoordinates = areas.map((row) {
-        final lat = (row['latitude'] as num?)?.toDouble();
-        final lng = (row['longitude'] as num?)?.toDouble();
-
-        return <String, dynamic>{
-          'lat': lat,
-          'lng': lng,
-          'photoUrl': row['photo_url'],
-          'photourlAreaId': row['id']?.toString(),
-          'photourlAreaSeqId': (row['seq_id'] as num?)?.toInt(),
-        };
-      }).where((row) => row['lat'] != null && row['lng'] != null);
-
-      // Points captured after the migration to location/photo. Photos for
-      // these aren't reloaded per-point here (the location/photo tables
-      // don't link them 1:1) — same limitation Flora & Fauna's edit flow
-      // has.
-      final locationRows = await ApiService.getLocationRowsByActivity(
-        activityTypeId: _treeGrowingActivityTypeId,
+      final rows = await ApiService.getLocationRowsByActivity(
+        activityTypeId: _mangrovePlantingActivityTypeId,
         activityId: seqId,
       );
 
-      final migratedCoordinates = locationRows.map((row) {
+      final loadedCoordinates = rows.map((row) {
         final lat = (row['latitude'] as num?)?.toDouble();
         final lng = (row['longitude'] as num?)?.toDouble();
 
@@ -756,12 +689,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
           'lng': lng,
           'locationRowId': (row['id'] as num?)?.toInt(),
         };
-      }).where((row) => row['lat'] != null && row['lng'] != null);
-
-      final loadedCoordinates = [
-        ...legacyCoordinates,
-        ...migratedCoordinates,
-      ];
+      }).where((row) => row['lat'] != null && row['lng'] != null).toList();
 
       if (!mounted) return;
       setState(() {
@@ -1019,8 +947,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
 
   Future<void> _deleteCoordinate(int index) async {
     final coord = capturedCoordinates[index];
-    final photourlAreaId = coord['photourlAreaId'] as String?;
-    final photourlAreaSeqId = coord['photourlAreaSeqId']?.toString();
+    final locationRowId = _toInt(coord['locationRowId']);
     // Show confirmation dialog
     if (!mounted) return;
     final confirmed = await showDialog<bool>(
@@ -1035,7 +962,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                   'Are you sure you want to delete this planting area?',
                   style: TextStyle(color: Colors.grey.shade700),
                 ),
-                if (photourlAreaSeqId != null)
+                if (locationRowId != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),
                     child: Container(
@@ -1045,7 +972,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        'Area #$photourlAreaSeqId will be marked as deleted',
+                        'Area #$locationRowId will be marked as deleted',
                         style: TextStyle(
                           fontSize: 12,
                           color: Colors.blue.shade700,
@@ -1076,39 +1003,8 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
 
     if (!confirmed) return;
 
-    final locationRowId = _toInt(coord['locationRowId']);
-
     // If it's an existing coordinate from database, mark as deleted via API
-    if (photourlAreaId != null && photourlAreaId.isNotEmpty) {
-      try {
-        await ApiService.deletePhotourlArea(photourlAreaId).timeout(
-          const Duration(seconds: 10),
-          onTimeout: () {
-            throw TimeoutException('Delete area timed out after 10 seconds');
-          },
-        );
-
-        if (!mounted) return;
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Data updated.'),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      } catch (e) {
-        if (!mounted) return;
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Unable to update data.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-        return;
-      }
-    } else if (locationRowId != null) {
+    if (locationRowId != null) {
       try {
         await ApiService.deleteLocationRow(locationRowId).timeout(
           const Duration(seconds: 10),
@@ -1177,7 +1073,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
   }
 
   Future<void> loadSeedlingNames() async {
-    final data = await seedlingListService.getSeedlingNames();
+    final data = await ApiService.getMangroveSpeciesNames();
     setState(() {
       seedlingNames = data;
       _isLoading = false;
@@ -1288,7 +1184,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Tree Growing Data Entry',
+                      'Mangrove Planting Data Entry',
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -1296,7 +1192,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                       ),
                     ),
                     Text(
-                      'Record new growing activity',
+                      'Record new mangrove planting activity',
                       style: TextStyle(
                         fontSize: 11,
                         color: Colors.white70,
@@ -1484,7 +1380,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                             ? null
                             : () async {
                           final seedlingNames =
-                              await seedlingListService.getSeedlingNames();
+                              await ApiService.getMangroveSpeciesNames();
                           showDialog(
                             context: context,
                             builder: (context) => AddSeedlingDialog(

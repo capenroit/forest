@@ -7,6 +7,7 @@ import 'screens/capiz_flora_fauna_recent_activity_page.dart';
 import 'screens/coastal_dashboard_page.dart';
 import 'screens/habitat_assessment_page.dart';
 import 'screens/login_screen.dart';
+import 'screens/mangrove_planting_activity_page.dart';
 import 'screens/marine_protected_area_page.dart';
 import 'screens/report_page.dart';
 import 'screens/seed_for_forest_recent_activity_page.dart';
@@ -211,26 +212,6 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     );
                   }),
-                  _buildNavItem(Icons.inventory, "Available Seedling Inventory",
-                      () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const SeedlingInventoryPage(),
-                      ),
-                    );
-                  }),
-                  _buildNavItem(Icons.assignment_outlined, "Seedling Request",
-                      () {
-                    Navigator.pop(context);
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => const SeedlingRequestPage(),
-                      ),
-                    );
-                  }),
                   _buildNavItem(Icons.park, "Seed for a Forest", () {
                     Navigator.pop(context);
                     Navigator.push(
@@ -265,6 +246,15 @@ class _SidePanelState extends State<SidePanel> {
                       ),
                     );
                   }),
+                  _buildNavItem(Icons.forest, "Mangrove Planting Activity", () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const MangrovePlantingActivityPage(),
+                      ),
+                    );
+                  }),
                   _buildNavItem(Icons.waves, "Habitat Assessment", () {
                     Navigator.pop(context);
                     Navigator.push(
@@ -280,6 +270,42 @@ class _SidePanelState extends State<SidePanel> {
                       context,
                       MaterialPageRoute(
                         builder: (_) => const MarineProtectedAreaPage(),
+                      ),
+                    );
+                  }),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Divider(color: Colors.white30),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    child: Text(
+                      "SEEDLING MANAGEMENT",
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                  ),
+                  _buildNavItem(Icons.inventory, "Available Seedling Inventory",
+                      () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const SeedlingInventoryPage(),
+                      ),
+                    );
+                  }),
+                  _buildNavItem(Icons.assignment_outlined, "Seedling Request",
+                      () {
+                    Navigator.pop(context);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const SeedlingRequestPage(),
                       ),
                     );
                   }),
