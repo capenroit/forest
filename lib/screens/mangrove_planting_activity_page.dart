@@ -4,6 +4,7 @@ import '../data_entry/mangrove_planting_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../widget/activity_photos_dialog.dart';
+import '../widget/side_panel.dart';
 import 'mangrove_planting_edit_page.dart';
 
 class MangrovePlantingActivityPage extends StatefulWidget {
@@ -44,10 +45,17 @@ class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityP
 
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: Row(
           children: const [
             Icon(Icons.forest, color: Colors.white, size: 32),

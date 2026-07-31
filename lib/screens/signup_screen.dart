@@ -16,11 +16,21 @@ class _SignupScreenState extends State<SignupScreen> {
   late TextEditingController _emailController;
   late TextEditingController _passwordController;
   late TextEditingController _confirmPasswordController;
-  
+
   List<Map<String, dynamic>> activityTypes = [];
- 
+
   bool isLoadingActivityTypes = true;
-  
+
+  static const Map<String, int> _divisionOptions = {
+    'FMS': 1,
+    'CRM': 2,
+    'SWM': 3,
+  };
+  // SWM is a separate app (its own signup flow) — this app only lets users
+  // register as FMS or CRM.
+  static const List<String> _visibleDivisions = ['FMS', 'CRM'];
+  String? _selectedDivision;
+
   bool _agreeToTerms = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
@@ -95,6 +105,13 @@ class _SignupScreenState extends State<SignupScreen> {
       return;
     }
 
+    if (_selectedDivision == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a division')),
+      );
+      return;
+    }
+
     if (!_agreeToTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please agree to terms and conditions')),
@@ -119,9 +136,14 @@ class _SignupScreenState extends State<SignupScreen> {
         throw Exception('Failed to create user account');
       }
 
-      // The user profile is automatically created by a database trigger
-      // Update the division_type_id now that the user exists
-    
+      // The user profile is automatically created by a database trigger.
+      // Update the division_type_id now that the user (and its trigger-made
+      // profile row) exists.
+      await Supabase.instance.client
+          .from('users')
+          .update({'division_type_id': _divisionOptions[_selectedDivision]})
+          .eq('id', res.user!.id);
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -253,6 +275,49 @@ class _SignupScreenState extends State<SignupScreen> {
                           hintText: 'Enter your full name',
                           prefixIcon: const Icon(
                             Icons.person,
+                            color: Color.fromARGB(255, 0, 176, 80),
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Division field
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Division',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: Color.fromARGB(255, 33, 33, 33),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String>(
+                        initialValue: _selectedDivision,
+                        items: _visibleDivisions
+                            .map((division) => DropdownMenuItem(
+                                  value: division,
+                                  child: Text(division),
+                                ))
+                            .toList(),
+                        onChanged: _isLoading
+                            ? null
+                            : (value) {
+                                setState(() => _selectedDivision = value);
+                              },
+                        decoration: InputDecoration(
+                          hintText: 'Select your division',
+                          prefixIcon: const Icon(
+                            Icons.apartment,
                             color: Color.fromARGB(255, 0, 176, 80),
                           ),
                           filled: true,

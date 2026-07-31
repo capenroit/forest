@@ -692,18 +692,24 @@ class ApiService {
     }
   }
 
-  /// Delete tree_survival_monitoring rows by their primary key. The primary
-  /// key column is detected per row ('seq_id' if present, else 'id') since
-  /// callers only have the raw row maps to work from.
+  /// Soft-delete tree_survival_monitoring rows by their primary key. The
+  /// primary key column is detected per row ('seq_id' if present, else 'id')
+  /// since callers only have the raw row maps to work from.
   static Future<void> deleteTreeSurvivalMonitoringRows(List<int> ids) async {
     if (ids.isEmpty) return;
     try {
-      await _client.from(_treeSurvivalTable).delete().inFilter('seq_id', ids);
+      await _client
+          .from(_treeSurvivalTable)
+          .update({'is_deleted': 1})
+          .inFilter('seq_id', ids);
     } catch (e) {
       // Compatibility fallback for schemas using 'id' as the primary key.
       if (e is PostgrestException) {
         try {
-          await _client.from(_treeSurvivalTable).delete().inFilter('id', ids);
+          await _client
+              .from(_treeSurvivalTable)
+              .update({'is_deleted': 1})
+              .inFilter('id', ids);
           return;
         } catch (_) {
           // Fall through to the original error below.
@@ -722,6 +728,7 @@ class ApiService {
       final monitoringRows = await _client
           .from(_treeSurvivalTable)
           .select()
+          .eq('is_deleted', 0)
           .order('created_at', ascending: false)
           .range(offset, offset + limit - 1);
       return List<Map<String, dynamic>>.from(monitoringRows as List<dynamic>);
@@ -730,21 +737,24 @@ class ApiService {
     }
   }
 
-  /// Resolve tree_growing seq_id values to activity info.
-  static Future<Map<int, Map<String, String>>> getTreeGrowingActivityInfoBySeqIds(
+  /// Resolve tree_growing seq_id values to activity info. Includes
+  /// project_type_id so callers can tell apart activities that share this
+  /// table under different project types (e.g. Tree Growing vs Mangrove
+  /// Planting) when the seq_id alone isn't enough context.
+  static Future<Map<int, Map<String, dynamic>>> getTreeGrowingActivityInfoBySeqIds(
     List<int> seqIds,
   ) async {
-    if (seqIds.isEmpty) return <int, Map<String, String>>{};
+    if (seqIds.isEmpty) return <int, Map<String, dynamic>>{};
 
     final uniqueSeqIds = seqIds.toSet().toList()..sort();
 
     try {
       final rows = await _client
           .from('tree_growing')
-          .select('seq_id, activity_name, municipality, barangay')
+          .select('seq_id, activity_name, municipality, barangay, project_type_id')
           .inFilter('seq_id', uniqueSeqIds);
 
-      final result = <int, Map<String, String>>{};
+      final result = <int, Map<String, dynamic>>{};
       for (final row in List<Map<String, dynamic>>.from(rows as List<dynamic>)) {
         final seqId = (row['seq_id'] as num?)?.toInt();
         if (seqId == null) continue;
@@ -753,6 +763,7 @@ class ApiService {
           'activity_name': (row['activity_name'] ?? '').toString().trim(),
           'municipality': (row['municipality'] ?? '').toString().trim(),
           'barangay': (row['barangay'] ?? '').toString().trim(),
+          'project_type_id': (row['project_type_id'] as num?)?.toInt(),
         };
       }
 
@@ -1034,59 +1045,6 @@ class ApiService {
 
   // ===== PHOTOURL AREA ENDPOINTS =====
 
-  /// Create a new photourl area with coordinates and optional photo
-  static Future<Map<String, dynamic>> createPhotourlArea({
-    required double latitude,
-    required double longitude,
-    String? photoUrl,
-    int? activityId,
-    int? activityTypeId,
-  }) async {
-    try {
-
-
-
-
-
-
-
-      final data = {
-        'latitude': latitude,
-        'longitude': longitude,
-        'photo_url': photoUrl,
-      };
-
-      // Only add optional fields if they're not null
-      if (activityId != null) {
-        data['activity_id'] = activityId;
-      }
-      if (activityTypeId != null) {
-        data['activity_type_id'] = activityTypeId;
-      }
-
-      final response =
-          await _client.from('photourl_area').insert(data).select();
-
-      if (response.isEmpty) {
-
-        throw Exception('Failed to create photourl area - no response');
-      }
-
-      final createdArea = response[0];
-
-
-
-
-
-
-
-      return createdArea;
-    } catch (e) {
-
-      throw Exception('Error creating photourl area: $e');
-    }
-  }
-
   /// Update photourl area with photo URL
   static Future<Map<String, dynamic>> updatePhotourlAreaPhotoUrl({
     required String photourlAreaId,
@@ -1329,6 +1287,7 @@ class ApiService {
     required String municipality,
     required String barangay,
     required String typeAssessment,
+    required DateTime date,
     double? area,
   }) async {
     try {
@@ -1338,6 +1297,7 @@ class ApiService {
         'barangay': barangay,
         'type_assessment': typeAssessment,
         'area': area,
+        'date': _formatDateOnly(date),
       };
 
       final response = await _client
@@ -1349,6 +1309,80 @@ class ApiService {
       return response;
     } catch (e) {
       throw Exception('Error saving habitat assessment: $e');
+    }
+  }
+
+  /// Update an existing habitat assessment record.
+  static Future<Map<String, dynamic>> updateHabitatAssessment({
+    required int id,
+    required String municipality,
+    required String barangay,
+    required String typeAssessment,
+    required DateTime date,
+    double? area,
+  }) async {
+    try {
+      final response = await _client
+          .from('crm_habitat_assssment')
+          .update({
+            'municipality': municipality,
+            'barangay': barangay,
+            'type_assessment': typeAssessment,
+            'area': area,
+            'date': _formatDateOnly(date),
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', id)
+          .select()
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error updating habitat assessment: $e');
+    }
+  }
+
+  /// Soft-delete a habitat assessment record.
+  static Future<void> deleteHabitatAssessment(int id) async {
+    try {
+      await _client
+          .from('crm_habitat_assssment')
+          .update({
+            'is_deleted': 1,
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          })
+          .eq('id', id);
+    } catch (e) {
+      throw Exception('Error deleting habitat assessment: $e');
+    }
+  }
+
+  /// Replace per-species rows for a habitat assessment record. Used by the
+  /// edit flow to avoid duplicating rows (existing rows for this assessment
+  /// are deleted before the new set is inserted).
+  static Future<void> replaceHabitatAssessmentDataRows({
+    required int assessmentId,
+    required List<Map<String, dynamic>> speciesRows,
+  }) async {
+    try {
+      await _client
+          .from('crm_habitat_assssment_data')
+          .delete()
+          .eq('assssment_id', assessmentId);
+
+      if (speciesRows.isEmpty) return;
+
+      final payload = speciesRows.map((row) {
+        return {
+          'assssment_id': assessmentId,
+          'species_name': row['species_name'],
+          'count': row['count'],
+        };
+      }).toList();
+
+      await _client.from('crm_habitat_assssment_data').insert(payload);
+    } catch (e) {
+      throw Exception('Error replacing habitat_assessment_data rows: $e');
     }
   }
 
@@ -1381,6 +1415,7 @@ class ApiService {
       final data = await _client
           .from('crm_habitat_assssment')
           .select()
+          .eq('is_deleted', 0)
           .order('created_at', ascending: false)
           .limit(limit);
 
@@ -1440,6 +1475,7 @@ class ApiService {
     required String name,
     required String municipality,
     required String barangay,
+    required DateTime date,
     double? area,
     String? ordinance,
   }) async {
@@ -1451,6 +1487,7 @@ class ApiService {
         'barangay': barangay,
         'area': area,
         'ordinance': ordinance,
+        'date': _formatDateOnly(date),
       };
 
       final response = await _client
@@ -1465,6 +1502,49 @@ class ApiService {
     }
   }
 
+  /// Update an existing marine protected area record.
+  static Future<Map<String, dynamic>> updateMarineProtectedArea({
+    required int id,
+    required String name,
+    required String municipality,
+    required String barangay,
+    required DateTime date,
+    double? area,
+    String? ordinance,
+  }) async {
+    try {
+      final response = await _client
+          .from('crm_marine_protected')
+          .update({
+            'name': name,
+            'municipality': municipality,
+            'barangay': barangay,
+            'area': area,
+            'ordinance': ordinance,
+            'date': _formatDateOnly(date),
+          })
+          .eq('id', id)
+          .select()
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error updating marine protected area: $e');
+    }
+  }
+
+  /// Soft-delete a marine protected area record.
+  static Future<void> deleteMarineProtectedArea(int id) async {
+    try {
+      await _client
+          .from('crm_marine_protected')
+          .update({'is_deleted': 1})
+          .eq('id', id);
+    } catch (e) {
+      throw Exception('Error deleting marine protected area: $e');
+    }
+  }
+
   /// Get all marine protected area records, most recent first.
   static Future<List<MarineProtectedArea>> getAllMarineProtectedAreas(
       {int limit = 200}) async {
@@ -1472,6 +1552,7 @@ class ApiService {
       final data = await _client
           .from('crm_marine_protected')
           .select()
+          .eq('is_deleted', 0)
           .order('created_at', ascending: false)
           .limit(limit);
 
@@ -1507,6 +1588,33 @@ class ApiService {
       return names;
     } catch (e) {
       return const <String>[];
+    }
+  }
+
+  /// Add a new mangrove species name to the shared lookup table.
+  static Future<Map<String, dynamic>> addMangroveSpeciesName({
+    required String name,
+    String? details,
+  }) async {
+    final trimmedName = name.trim();
+    final trimmedDetails = (details ?? '').trim();
+    if (trimmedName.isEmpty) {
+      throw Exception('Mangrove species name cannot be empty.');
+    }
+
+    try {
+      final response = await _client
+          .from('mangrove_list')
+          .insert({
+            'name': trimmedName,
+            'details': trimmedDetails.isEmpty ? null : trimmedDetails,
+          })
+          .select('id, name')
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error adding mangrove species: $e');
     }
   }
 

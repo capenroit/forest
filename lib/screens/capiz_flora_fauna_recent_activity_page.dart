@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data_entry/flora_fauna_form.dart';
 import '../service/api_service.dart';
 import '../widget/activity_photos_dialog.dart';
+import '../widget/side_panel.dart';
 
 class CapizFloraFaunaRecentActivityPage extends StatefulWidget {
   const CapizFloraFaunaRecentActivityPage({super.key});
@@ -330,10 +331,17 @@ class _CapizFloraFaunaRecentActivityPageState
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: const Text(
           'Capiz Flora and Fauna Survey',
           style: TextStyle(

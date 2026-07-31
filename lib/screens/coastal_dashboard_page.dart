@@ -15,10 +15,15 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../widget/export_options_dialog.dart';
 import '../widget/polygon_calculator.dart';
+import '../widget/side_panel.dart';
 import '../widget/web_helper.dart' as web_helper;
 
 class CoastalDashboardPage extends StatefulWidget {
-  const CoastalDashboardPage({super.key});
+  const CoastalDashboardPage({super.key, this.drawer});
+
+  /// Optional drawer, used when this page is shown as the app's home screen
+  /// for Coastal Management (division_type_id == 2) users.
+  final Widget? drawer;
 
   @override
   State<CoastalDashboardPage> createState() => _CoastalDashboardPageState();
@@ -27,9 +32,11 @@ class CoastalDashboardPage extends StatefulWidget {
 class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
   static const int _habitatAssessmentTypeId = 8;
   static const int _marineProtectedAreaTypeId = 9;
+  static const int _mangrovePlantingTypeId = 6;
 
   int _habitatCount = 0;
   int _marineCount = 0;
+  int _mangroveCount = 0;
   double _totalAreaHa = 0;
   bool _isLoadingStats = true;
 
@@ -40,6 +47,7 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
   List<Map<String, dynamic>> _allLocationRows = [];
   Map<int, Map<String, dynamic>> _habitatById = {};
   Map<int, Map<String, dynamic>> _marineById = {};
+  Map<int, Map<String, dynamic>> _mangroveById = {};
 
   List<Marker> _markers = [];
   List<Polygon> _polygons = [];
@@ -68,7 +76,11 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
       final response = await Supabase.instance.client
           .from('project_type')
           .select('id, projectname')
-          .inFilter('id', [_habitatAssessmentTypeId, _marineProtectedAreaTypeId])
+          .inFilter('id', [
+            _habitatAssessmentTypeId,
+            _marineProtectedAreaTypeId,
+            _mangrovePlantingTypeId,
+          ])
           .order('id')
           .timeout(const Duration(seconds: 5));
 
@@ -113,18 +125,31 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
       final locationResponse = await Supabase.instance.client
           .from('location')
           .select('id, activity_id, activity_type_id, latitude, longitude')
-          .inFilter('activity_type_id', [_habitatAssessmentTypeId, _marineProtectedAreaTypeId])
+          .inFilter('activity_type_id', [
+            _habitatAssessmentTypeId,
+            _marineProtectedAreaTypeId,
+            _mangrovePlantingTypeId,
+          ])
           .eq('isDeleted', 0)
           .timeout(const Duration(seconds: 5));
 
       final habitatResponse = await Supabase.instance.client
           .from('crm_habitat_assssment')
           .select()
+          .eq('is_deleted', 0)
           .timeout(const Duration(seconds: 5));
 
       final marineResponse = await Supabase.instance.client
           .from('crm_marine_protected')
           .select()
+          .eq('is_deleted', 0)
+          .timeout(const Duration(seconds: 5));
+
+      final mangroveResponse = await Supabase.instance.client
+          .from('tree_growing')
+          .select()
+          .eq('project_type_id', _mangrovePlantingTypeId)
+          .eq('is_deleted', 0)
           .timeout(const Duration(seconds: 5));
 
       final typedLocationRows = locationResponse
@@ -134,6 +159,9 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
       final typedMarineRows = marineResponse
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
+      final typedMangroveRows = mangroveResponse
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
 
@@ -149,6 +177,12 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
         if (id != null) marineById[id] = row;
       }
 
+      final mangroveById = <int, Map<String, dynamic>>{};
+      for (final row in typedMangroveRows) {
+        final id = _toInt(row['seq_id']);
+        if (id != null) mangroveById[id] = row;
+      }
+
       double totalArea = 0;
       for (final row in typedHabitatRows) {
         totalArea += (_toDouble(row['area']) ?? 0);
@@ -156,14 +190,19 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
       for (final row in typedMarineRows) {
         totalArea += (_toDouble(row['area']) ?? 0);
       }
+      for (final row in typedMangroveRows) {
+        totalArea += (_toDouble(row['area_cover']) ?? 0);
+      }
 
       if (!mounted) return;
       setState(() {
         _allLocationRows = typedLocationRows;
         _habitatById = habitatById;
         _marineById = marineById;
+        _mangroveById = mangroveById;
         _habitatCount = typedHabitatRows.length;
         _marineCount = typedMarineRows.length;
+        _mangroveCount = typedMangroveRows.length;
         _totalAreaHa = totalArea;
         _isLoadingStats = false;
       });
@@ -176,6 +215,18 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
         _isLoadingStats = false;
       });
     }
+  }
+
+  Color _markerColorForType(int activityTypeId) {
+    if (activityTypeId == _habitatAssessmentTypeId) return Colors.teal.shade600;
+    if (activityTypeId == _mangrovePlantingTypeId) return Colors.green.shade700;
+    return Colors.blue.shade600;
+  }
+
+  Color _polygonColorForType(int activityTypeId) {
+    if (activityTypeId == _habitatAssessmentTypeId) return Colors.teal.shade300;
+    if (activityTypeId == _mangrovePlantingTypeId) return Colors.green.shade300;
+    return Colors.blue.shade300;
   }
 
   void _applyProjectTypeFilter() {
@@ -200,7 +251,9 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
           ? _habitatById.containsKey(activityId)
           : activityTypeId == _marineProtectedAreaTypeId
               ? _marineById.containsKey(activityId)
-              : false;
+              : activityTypeId == _mangrovePlantingTypeId
+                  ? _mangroveById.containsKey(activityId)
+                  : false;
       if (!sourceExists) continue;
 
       final key = '${activityTypeId}_$activityId';
@@ -227,9 +280,7 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
             onTap: () => _showMarkerInfo(activityTypeId, activityId),
             child: _RingMarkerIcon(
               seqId: activityId,
-              color: activityTypeId == _habitatAssessmentTypeId
-                  ? Colors.teal.shade600
-                  : Colors.blue.shade600,
+              color: _markerColorForType(activityTypeId),
             ),
           ),
         ),
@@ -237,9 +288,7 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
 
       if (points.length >= 4) {
         final areaHectares = PolygonCalculator.calculatePolygonAreaInHectares(points);
-        var polygonColor = activityTypeId == _habitatAssessmentTypeId
-            ? Colors.teal.shade300
-            : Colors.blue.shade300;
+        var polygonColor = _polygonColorForType(activityTypeId);
         if (areaHectares > 10) {
           polygonColor = Colors.indigo.shade300;
         } else if (areaHectares > 5) {
@@ -297,7 +346,9 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
                       Text(
                         activityTypeId == _habitatAssessmentTypeId
                             ? 'Habitat Assessment Details'
-                            : 'Marine Protected Area Details',
+                            : activityTypeId == _mangrovePlantingTypeId
+                                ? 'Mangrove Planting Details'
+                                : 'Marine Protected Area Details',
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -414,7 +465,47 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
         MapEntry('Species', species),
         MapEntry('Area', area),
         MapEntry('Lat & Long', latLong),
-        MapEntry('Date', _formatDate(row['created_at'])),
+        MapEntry('Date', _formatDate(row['date'] ?? row['created_at'])),
+      ];
+    } else if (activityTypeId == _mangrovePlantingTypeId) {
+      final row = _mangroveById[activityId] ?? const <String, dynamic>{};
+
+      String area = 'N/A';
+      if (coords.length >= 3) {
+        final ha = PolygonCalculator.calculatePolygonAreaInHectares(coords);
+        area = '${ha.toStringAsFixed(2)} ha';
+      } else {
+        final storedArea = _toDouble(row['area_cover']);
+        if (storedArea != null && storedArea > 0) {
+          area = '${storedArea.toStringAsFixed(2)} ha';
+        }
+      }
+
+      String species = 'N/A';
+      try {
+        final speciesRows = await Supabase.instance.client
+            .from('tree_growing_data')
+            .select('seed_name, seedling_count')
+            .eq('tree_growing_id', activityId);
+
+        final names = List<Map<String, dynamic>>.from(speciesRows as List)
+            .map((r) => (r['seed_name'] ?? '').toString().trim())
+            .where((name) => name.isNotEmpty)
+            .toSet()
+            .toList();
+        if (names.isNotEmpty) species = names.join(', ');
+      } catch (_) {
+        // Keep fallback value.
+      }
+
+      return [
+        MapEntry('Activity Name', (row['activity_name'] ?? 'N/A').toString()),
+        MapEntry('Municipality', (row['municipality'] ?? 'N/A').toString()),
+        MapEntry('Barangay', (row['barangay'] ?? 'N/A').toString()),
+        MapEntry('Species', species),
+        MapEntry('Area', area),
+        MapEntry('Lat & Long', latLong),
+        MapEntry('Date', _formatDate(row['planting_date'] ?? row['created_at'])),
       ];
     } else {
       final row = _marineById[activityId] ?? const <String, dynamic>{};
@@ -437,7 +528,7 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
         MapEntry('Ordinance', (row['ordinance'] ?? 'N/A').toString()),
         MapEntry('Area', area),
         MapEntry('Lat & Long', latLong),
-        MapEntry('Date', _formatDate(row['created_at'])),
+        MapEntry('Date', _formatDate(row['date'] ?? row['created_at'])),
       ];
     }
   }
@@ -610,11 +701,18 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: const Text(
           'Coastal Resource Management Dashboard',
           style: TextStyle(color: Colors.white, fontSize: 16),
         ),
       ),
+      drawer: widget.drawer ?? const SidePanel(),
       body: RefreshIndicator(
         onRefresh: _refreshDashboard,
         color: const Color.fromARGB(255, 31, 103, 78),
@@ -831,6 +929,10 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
                   _buildStatCard(
                     title: 'Total Marine Protected Areas',
                     value: _isLoadingStats ? '...' : '$_marineCount',
+                  ),
+                  _buildStatCard(
+                    title: 'Total Mangrove Planting',
+                    value: _isLoadingStats ? '...' : '$_mangroveCount',
                   ),
                   _buildStatCard(
                     title: 'Total Area Covered (ha)',

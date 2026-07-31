@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data_entry/seed_for_forest_models.dart';
 import '../data_entry/seed_for_forest_form.dart';
 import '../service/seedling_list_service.dart';
+import '../widget/side_panel.dart';
 
 class SeedForForestRecentActivityPage extends StatefulWidget {
   const SeedForForestRecentActivityPage({super.key});
@@ -29,10 +30,17 @@ class _SeedForForestRecentActivityPageState
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: const Text(
           'Seed for a Forest',
           style: TextStyle(

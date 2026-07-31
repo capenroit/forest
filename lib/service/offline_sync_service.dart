@@ -13,6 +13,10 @@ class OfflineSyncService {
   static const String _photosDirName = 'offline_photos';
   static const String _storageBucketName = 'Forest Management';
   static const int _treeGrowingActivityTypeId = 1;
+  static const Map<int, String> _storageFolderByProjectType = {
+    1: 'tree_growing',
+    6: 'mangrove_planting',
+  };
 
   // ─── Paths ───────────────────────────────────────────────────────────────
 
@@ -193,26 +197,30 @@ class OfflineSyncService {
       );
     }
 
-    // 3. Insert coordinate + photo rows.
+    // 3. Insert coordinate + photo rows — mirrors the online save path
+    // (a `location` row per point, a `photo` row per captured image) rather
+    // than the legacy `photourl_area` table, so offline-synced photos show
+    // up alongside online ones for the same activity.
     if (activityId != null) {
+      final projectTypeId = planting.projectTypeId ?? _treeGrowingActivityTypeId;
+      final storageFolder =
+          _storageFolderByProjectType[projectTypeId] ?? 'tree_growing';
+
       for (final coord in coordinates) {
         final lat = (coord['lat'] as num?)?.toDouble();
         final lng = (coord['lng'] as num?)?.toDouble();
         if (lat == null || lng == null) continue;
 
-        final created = await ApiService.createPhotourlArea(
+        final createdLocation = await ApiService.createLocationRow(
+          activityId: activityId,
+          activityTypeId: projectTypeId,
           latitude: lat,
           longitude: lng,
-          photoUrl: null,
-          activityId: activityId,
         );
-
-        final photourlAreaId = created['id']?.toString();
-        final photoSeqId = (created['seq_id'] as num?)?.toInt();
+        final locationId = (createdLocation['id'] as num?)?.toInt();
 
         final stablePath = coord['stablePhotoPath'] as String?;
-        if (photourlAreaId != null &&
-            photoSeqId != null &&
+        if (locationId != null &&
             stablePath != null &&
             stablePath.isNotEmpty) {
           final photoFile = File(stablePath);
@@ -221,12 +229,12 @@ class OfflineSyncService {
                 ? stablePath.split('.').last.toLowerCase()
                 : 'jpg';
             final photoName =
-                'photo_000_${divisionTypeId}_${_treeGrowingActivityTypeId}_${activityId}_$photoSeqId.$ext';
+                'photo_000_${divisionTypeId}_${projectTypeId}_${activityId}_$locationId.$ext';
 
             await Supabase.instance.client.storage
                 .from(_storageBucketName)
                 .upload(
-                  'public/tree_growing/$photoName',
+                  'public/$storageFolder/$photoName',
                   photoFile,
                   fileOptions: FileOptions(
                     upsert: false,
@@ -236,12 +244,12 @@ class OfflineSyncService {
 
             final encodedBucket = Uri.encodeComponent(_storageBucketName);
             final photoUrl =
-                'public/$encodedBucket/public/tree_growing/$photoName';
+                'public/$encodedBucket/public/$storageFolder/$photoName';
 
-            await ApiService.updatePhotourlAreaPhotoUrl(
-              photourlAreaId: photourlAreaId,
+            await ApiService.createPhotoRow(
+              projectTypeId: projectTypeId,
+              activityId: activityId,
               photoUrl: photoUrl,
-              photoName: photoName,
             );
 
             // Clean up the stable local file after a successful upload.

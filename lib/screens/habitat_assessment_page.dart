@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data_entry/habitat_assessment_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
+import '../widget/side_panel.dart';
 
 class HabitatAssessmentPage extends StatefulWidget {
   const HabitatAssessmentPage({super.key});
@@ -22,6 +23,8 @@ class _HabitatActivityItem {
     required this.totalCount,
   });
 }
+
+enum _ActivityCardMenuAction { edit, delete }
 
 class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
   final List<_HabitatActivityItem> _items = [];
@@ -108,6 +111,132 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
     );
   }
 
+  Future<void> _editActivity(HabitatAssessment assessment) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        insetPadding: const EdgeInsets.all(16),
+        child: HabitatAssessmentForm(
+          initialData: assessment,
+          onSave: () {
+            Navigator.pop(dialogContext);
+            _loadRecentActivities(showLoader: false);
+          },
+          onCancel: () => Navigator.pop(dialogContext),
+        ),
+      ),
+    );
+  }
+
+  void _deleteActivity(HabitatAssessment assessment) {
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+          contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          actionsPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          title: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: Color(0xFFC62828),
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Delete Activity?',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF22232F),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'This record will be permanently removed. You can not undo this action.',
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.35,
+              color: Color(0xFF5E6175),
+            ),
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                side: const BorderSide(color: Color(0xFFD4D7E5)),
+              ),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF4E526A), fontWeight: FontWeight.w600),
+              ),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.delete_rounded, size: 18),
+              label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w700)),
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+
+                try {
+                  final id = assessment.id;
+                  if (id == null) {
+                    throw Exception('Missing activity id.');
+                  }
+
+                  await ApiService.deleteHabitatAssessment(id);
+
+                  if (!mounted) return;
+                  setState(() {
+                    _items.removeWhere((item) => item.assessment.id == assessment.id);
+                  });
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Activity deleted successfully.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Unable to delete activity: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   String _formatDate(DateTime date) {
     final year = date.year.toString().padLeft(4, '0');
     final month = date.month.toString().padLeft(2, '0');
@@ -119,10 +248,17 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: Row(
           children: const [
             Icon(Icons.waves, color: Colors.white, size: 28),
@@ -279,6 +415,34 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
                       ? 'N/A'
                       : assessment.barangay,
                 ),
+              ),
+              const SizedBox(width: 8),
+              PopupMenuButton<_ActivityCardMenuAction>(
+                icon: const Icon(
+                  Icons.more_vert_rounded,
+                  size: 22,
+                  color: Color(0xFF8B8EA3),
+                ),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                onSelected: (action) {
+                  if (action == _ActivityCardMenuAction.edit) {
+                    _editActivity(assessment);
+                  }
+                  if (action == _ActivityCardMenuAction.delete) {
+                    _deleteActivity(assessment);
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem<_ActivityCardMenuAction>(
+                    value: _ActivityCardMenuAction.edit,
+                    child: Text('Edit'),
+                  ),
+                  PopupMenuItem<_ActivityCardMenuAction>(
+                    value: _ActivityCardMenuAction.delete,
+                    child: Text('Delete'),
+                  ),
+                ],
               ),
             ],
           ),

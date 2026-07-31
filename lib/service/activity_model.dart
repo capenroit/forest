@@ -191,9 +191,11 @@ class HabitatAssessment {
       barangay: json['barangay'] as String? ?? '',
       typeAssessment: json['type_assessment'] as String? ?? '',
       area: (json['area'] as num?)?.toDouble(),
-      date: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
-          : DateTime.now(),
+      date: json['date'] != null && json['date'].toString().isNotEmpty
+          ? DateTime.parse(json['date'] as String)
+          : (json['created_at'] != null
+              ? DateTime.parse(json['created_at'] as String)
+              : DateTime.now()),
     );
   }
 }
@@ -225,9 +227,11 @@ class MarineProtectedArea {
       barangay: json['barangay'] as String? ?? '',
       area: (json['area'] as num?)?.toDouble(),
       ordinance: json['ordinance'] as String?,
-      date: json['created_at'] != null
-          ? DateTime.parse(json['created_at'] as String)
-          : DateTime.now(),
+      date: json['date'] != null && json['date'].toString().isNotEmpty
+          ? DateTime.parse(json['date'] as String)
+          : (json['created_at'] != null
+              ? DateTime.parse(json['created_at'] as String)
+              : DateTime.now()),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
+import '../widget/side_panel.dart';
 
 class _PropagatedDonation {
   final int id;
@@ -169,10 +170,17 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: Row(
           children: const [
             Icon(Icons.inventory_2_rounded, color: Colors.white, size: 32),

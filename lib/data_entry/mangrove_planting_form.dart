@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -147,6 +148,15 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
   }
 
   Future<bool> _hasInternetConnection() async {
+    if (kIsWeb) {
+      // The offline-queue path below (OfflineSyncService) uses path_provider
+      // to write to a local file, which has no implementation on web and
+      // throws MissingPluginException. Web has no meaningful offline mode
+      // here, so always treat it as online — same convention already used
+      // by SidePanel's connectivity check and the login screen.
+      return true;
+    }
+
     try {
       final response = await http
           .get(Uri.parse('https://clients3.google.com/generate_204'))
@@ -221,89 +231,112 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
   Future<void> _handleSave() async {
     if (_isSaving) return;
 
-    final activityName = _activityNameController.text.trim();
-    final details = _detailsController.text.trim();
-    final municipality = _selectedMunicipality?.name.trim() ?? '';
-    final barangay = _selectedBarangay?.trim() ?? '';
-
-    if (activityName.isEmpty || municipality.isEmpty || barangay.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Data is incomplete.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    final authUserId = AuthSession.currentUser?.id ??
-        Supabase.instance.client.auth.currentUser?.id;
-
-    if (authUserId == null || authUserId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to save data.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
-
-    final parsedDate =
-        DateTime.tryParse(_dateController.text.trim()) ?? DateTime.now();
-    final parsedArea = double.tryParse(_areaCoverController.text.trim());
-
-    const treeSpecies = '';
-    final numberOfTrees = _totalSeedlings;
-
-    // ── Offline path ──────────────────────────────────────────────────────
-    final isOnline = await _hasInternetConnection();
-    if (!isOnline) {
-      final offlinePlanting = TreePlanting(
-        id: widget.initialData?.id,
-        seqId: widget.initialData?.seqId,
-        projectTypeId: 6,
-        userid: authUserId,
-        activityName: activityName,
-        barangay: barangay,
-        municipality: municipality,
-        details: details.isEmpty ? null : details,
-        treeSpecies: treeSpecies,
-        numberOfTrees: numberOfTrees,
-        areaCover: parsedArea,
-        date: parsedDate,
-      );
-      final seedRows = _seedlings
-          .map((s) => {
-                'seed_name': s.seedlingType,
-                'seedling_count': s.quantity,
-              })
-          .toList();
-      await OfflineSyncService.queueRecord(
-        planting: offlinePlanting,
-        seedRows: seedRows,
-        coordinates: List<Map<String, dynamic>>.from(capturedCoordinates),
-        divisionTypeId: _resolveDivisionTypeId(),
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Data was saved.'),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 3),
-        ),
-      );
-      widget.onSave(offlinePlanting);
-      return;
-    }
-    // ── End offline path ──────────────────────────────────────────────────
-
-    // Flush any pending offline records silently before saving the new one.
-    OfflineSyncService.syncAll().ignore();
-
     setState(() => _isSaving = true);
 
     try {
+      final activityName = _activityNameController.text.trim();
+      final details = _detailsController.text.trim();
+      final municipality = _selectedMunicipality?.name.trim() ?? '';
+      final barangay = _selectedBarangay?.trim() ?? '';
+
+      if (activityName.isEmpty || municipality.isEmpty || barangay.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data is incomplete.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final authUserId = AuthSession.currentUser?.id ??
+          Supabase.instance.client.auth.currentUser?.id;
+
+      if (authUserId == null || authUserId.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to save data.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final parsedDate =
+          DateTime.tryParse(_dateController.text.trim()) ?? DateTime.now();
+      final parsedArea = double.tryParse(_areaCoverController.text.trim());
+
+      const treeSpecies = '';
+      final numberOfTrees = _totalSeedlings;
+
+      // ── Offline path ────────────────────────────────────────────────────
+      final isOnline = await _hasInternetConnection();
+      if (!mounted) return;
+      if (!isOnline) {
+        final offlinePlanting = TreePlanting(
+          id: widget.initialData?.id,
+          seqId: widget.initialData?.seqId,
+          projectTypeId: 6,
+          userid: authUserId,
+          activityName: activityName,
+          barangay: barangay,
+          municipality: municipality,
+          details: details.isEmpty ? null : details,
+          treeSpecies: treeSpecies,
+          numberOfTrees: numberOfTrees,
+          areaCover: parsedArea,
+          date: parsedDate,
+        );
+        final seedRows = _seedlings
+            .map((s) => {
+                  'seed_name': s.seedlingType,
+                  'seedling_count': s.quantity,
+                })
+            .toList();
+
+        try {
+          await OfflineSyncService.queueRecord(
+            planting: offlinePlanting,
+            seedRows: seedRows,
+            coordinates: List<Map<String, dynamic>>.from(capturedCoordinates),
+            divisionTypeId: _resolveDivisionTypeId(),
+          ).timeout(
+            const Duration(seconds: 15),
+            onTimeout: () => throw TimeoutException(
+              'Saving offline is taking too long. Please try again.',
+            ),
+          );
+        } catch (e, st) {
+          debugPrint('SAVE FAILED: $e\n$st');
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                e is TimeoutException
+                    ? (e.message ?? 'Unable to save data.')
+                    : 'Unable to save data.',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave(offlinePlanting);
+        return;
+      }
+      // ── End offline path ────────────────────────────────────────────────
+
       final isEditing =
           widget.initialData?.id != null && widget.initialData!.id!.isNotEmpty;
 
@@ -322,81 +355,140 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
         date: parsedDate,
       );
 
-      final savedMangrovePlanting = await ApiService.saveTreePlanting(planting);
-      final int? activityId = (savedMangrovePlanting['seq_id'] as num?)?.toInt();
-      final divisionTypeId = _resolveDivisionTypeId();
+      Map<String, dynamic> savedMangrovePlanting;
+      try {
+        // Every Supabase call below is a plain network request with no
+        // built-in timeout. Without this guard, a dropped/slow connection
+        // mid-save leaves the (non-dismissible) dialog spinning forever —
+        // which is what looks like the app "freezing".
+        savedMangrovePlanting = await (() async {
+          final saved = await ApiService.saveTreePlanting(planting);
+          final int? activityId = (saved['seq_id'] as num?)?.toInt();
+          final divisionTypeId = _resolveDivisionTypeId();
 
-      if (activityId != null) {
-        final seedRows = _seedlings
-            .map((seedling) => {
-                  'seed_name': seedling.seedlingType,
-                  'seedling_count': seedling.quantity,
-                })
-            .toList();
+          if (activityId != null) {
+            final seedRows = _seedlings
+                .map((seedling) => {
+                      'seed_name': seedling.seedlingType,
+                      'seedling_count': seedling.quantity,
+                    })
+                .toList();
 
-        if (isEditing) {
-          await ApiService.replaceTreeGrowingDataRows(
-            treeGrowingId: activityId,
-            seedRows: seedRows,
-          );
-        } else if (seedRows.isNotEmpty) {
-          await ApiService.saveTreeGrowingDataRows(
-            treeGrowingId: activityId,
-            seedRows: seedRows,
-          );
-        }
+            if (isEditing) {
+              await ApiService.replaceTreeGrowingDataRows(
+                treeGrowingId: activityId,
+                seedRows: seedRows,
+              );
+            } else if (seedRows.isNotEmpty) {
+              await ApiService.saveTreeGrowingDataRows(
+                treeGrowingId: activityId,
+                seedRows: seedRows,
+              );
+            }
+          }
+
+          if (activityId != null && capturedCoordinates.isNotEmpty) {
+            for (final coord in capturedCoordinates) {
+              final latitude = (coord['lat'] as num?)?.toDouble();
+              final longitude = (coord['lng'] as num?)?.toDouble();
+
+              if (latitude == null || longitude == null) continue;
+
+              final photoPath = coord['photoPath'] as String?;
+              int? locationId = _toInt(coord['locationRowId']);
+
+              if (locationId != null) {
+                await ApiService.updateLocationRowCoordinates(
+                  locationId: locationId,
+                  latitude: latitude,
+                  longitude: longitude,
+                );
+              } else {
+                final createdRow = await ApiService.createLocationRow(
+                  activityId: activityId,
+                  activityTypeId: _mangrovePlantingActivityTypeId,
+                  latitude: latitude,
+                  longitude: longitude,
+                );
+                locationId = (createdRow['id'] as num?)?.toInt();
+                coord['locationRowId'] = locationId;
+              }
+
+              if (photoPath != null && photoPath.isNotEmpty) {
+                final photoName = _buildMangrovePlantingPhotoName(
+                  divisionTypeId: divisionTypeId,
+                  activityId: activityId,
+                  photoId: locationId ?? DateTime.now().millisecondsSinceEpoch,
+                  sourcePath: photoPath,
+                );
+
+                final supabasePhotoUrl =
+                    await _uploadMangrovePlantingPhotoToSupabase(
+                  localPath: photoPath,
+                  photoName: photoName,
+                );
+
+                await ApiService.createPhotoRow(
+                  projectTypeId: _mangrovePlantingActivityTypeId,
+                  activityId: activityId,
+                  photoUrl: supabasePhotoUrl,
+                );
+
+                coord['photoPath'] = null;
+                coord['photoUrl'] = supabasePhotoUrl;
+              }
+            }
+          }
+
+          return saved;
+        })()
+            .timeout(
+          const Duration(seconds: 45),
+          onTimeout: () => throw TimeoutException(
+            'Saving is taking too long. Check your connection and try again.',
+          ),
+        );
+      } catch (e, st) {
+        debugPrint('SAVE FAILED: $e\n$st');
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              e is TimeoutException
+                  ? (e.message ?? 'Unable to save data.')
+                  : 'Unable to save data.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
       }
 
-      if (activityId != null && capturedCoordinates.isNotEmpty) {
-        for (final coord in capturedCoordinates) {
-          final latitude = (coord['lat'] as num?)?.toDouble();
-          final longitude = (coord['lng'] as num?)?.toDouble();
-
-          if (latitude == null || longitude == null) continue;
-
-          final photoPath = coord['photoPath'] as String?;
-          int? locationId = _toInt(coord['locationRowId']);
-
-          if (locationId != null) {
-            await ApiService.updateLocationRowCoordinates(
-              locationId: locationId,
-              latitude: latitude,
-              longitude: longitude,
-            );
-          } else {
-            final createdRow = await ApiService.createLocationRow(
-              activityId: activityId,
-              activityTypeId: _mangrovePlantingActivityTypeId,
-              latitude: latitude,
-              longitude: longitude,
-            );
-            locationId = (createdRow['id'] as num?)?.toInt();
-            coord['locationRowId'] = locationId;
-          }
-
-          if (photoPath != null && photoPath.isNotEmpty) {
-            final photoName = _buildMangrovePlantingPhotoName(
-              divisionTypeId: divisionTypeId,
-              activityId: activityId,
-              photoId: locationId ?? DateTime.now().millisecondsSinceEpoch,
-              sourcePath: photoPath,
-            );
-
-            final supabasePhotoUrl = await _uploadMangrovePlantingPhotoToSupabase(
-              localPath: photoPath,
-              photoName: photoName,
-            );
-
-            await ApiService.createPhotoRow(
-              projectTypeId: _mangrovePlantingActivityTypeId,
-              activityId: activityId,
-              photoUrl: supabasePhotoUrl,
-            );
-
-            coord['photoPath'] = null;
-            coord['photoUrl'] = supabasePhotoUrl;
-          }
-        }
+      // The record is already saved on the server at this point — a
+      // failure below is just a local response-parsing issue, not a save
+      // failure, so it must not be reported as one (the dialog should
+      // still close on a save that actually succeeded).
+      TreePlanting savedPlanting;
+      try {
+        savedPlanting = TreePlanting.fromJson(savedMangrovePlanting);
+      } catch (e, st) {
+        debugPrint(
+          'SAVE FAILED (response parse only, save succeeded): $e\n$st',
+        );
+        savedPlanting = TreePlanting(
+          id: (savedMangrovePlanting['id'] ?? planting.id)?.toString(),
+          seqId: _toInt(savedMangrovePlanting['seq_id']) ?? planting.seqId,
+          projectTypeId: planting.projectTypeId,
+          userid: planting.userid,
+          activityName: planting.activityName,
+          barangay: planting.barangay,
+          municipality: planting.municipality,
+          details: planting.details,
+          treeSpecies: planting.treeSpecies,
+          numberOfTrees: planting.numberOfTrees,
+          areaCover: planting.areaCover,
+          date: planting.date,
+        );
       }
 
       if (!mounted) return;
@@ -408,16 +500,13 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
         ),
       );
 
-      widget.onSave(TreePlanting.fromJson(savedMangrovePlanting));
-    } catch (e) {
-      if (!mounted) return;
+      widget.onSave(savedPlanting);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to save data.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      // Flush any other pending offline records now that we know we're
+      // online and this save has already completed. Running this earlier
+      // (before the save above) raced it against this save over the same
+      // local queue/connection.
+      OfflineSyncService.syncAll().ignore();
     } finally {
       if (mounted) {
         setState(() => _isSaving = false);
@@ -503,7 +592,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
 
     if (!mounted) return;
     setState(() {
-      _seedlings[index] = SeedlingEntry(seedlingType: species, quantity: quantity);
+      _seedlings[index] =
+          SeedlingEntry(seedlingType: species, quantity: quantity);
     });
   }
 
@@ -680,16 +770,19 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
         activityId: seqId,
       );
 
-      final loadedCoordinates = rows.map((row) {
-        final lat = (row['latitude'] as num?)?.toDouble();
-        final lng = (row['longitude'] as num?)?.toDouble();
+      final loadedCoordinates = rows
+          .map((row) {
+            final lat = (row['latitude'] as num?)?.toDouble();
+            final lng = (row['longitude'] as num?)?.toDouble();
 
-        return <String, dynamic>{
-          'lat': lat,
-          'lng': lng,
-          'locationRowId': (row['id'] as num?)?.toInt(),
-        };
-      }).where((row) => row['lat'] != null && row['lng'] != null).toList();
+            return <String, dynamic>{
+              'lat': lat,
+              'lng': lng,
+              'locationRowId': (row['id'] as num?)?.toInt(),
+            };
+          })
+          .where((row) => row['lat'] != null && row['lng'] != null)
+          .toList();
 
       if (!mounted) return;
       setState(() {
@@ -905,7 +998,6 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
 
         // Update the area controller with the computed area
         _areaCoverController.text = areaInHectares.toStringAsFixed(2);
-
       } catch (e) {
         // Error computing area
       }
@@ -1141,8 +1233,7 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
       }
     }
 
-    final hasBarangayItems =
-        !_isLoading &&
+    final hasBarangayItems = !_isLoading &&
         !_isLoadingBarangays &&
         _selectedMunicipality != null &&
         _filteredBarangays.isNotEmpty;
@@ -1379,23 +1470,24 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                         onPressed: _isLoadingSeedlings
                             ? null
                             : () async {
-                          final seedlingNames =
-                              await ApiService.getMangroveSpeciesNames();
-                          showDialog(
-                            context: context,
-                            builder: (context) => AddSeedlingDialog(
-                              seedlingInventory: seedlingNames,
-                              onAdd: (type, quantity) {
-                                setState(() {
-                                  _seedlings.add(
-                                    SeedlingEntry(
-                                        seedlingType: type, quantity: quantity),
-                                  );
-                                });
+                                final seedlingNames =
+                                    await ApiService.getMangroveSpeciesNames();
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AddSeedlingDialog(
+                                    seedlingInventory: seedlingNames,
+                                    onAdd: (type, quantity) {
+                                      setState(() {
+                                        _seedlings.add(
+                                          SeedlingEntry(
+                                              seedlingType: type,
+                                              quantity: quantity),
+                                        );
+                                      });
+                                    },
+                                  ),
+                                );
                               },
-                            ),
-                          );
-                        },
                         icon: const Icon(Icons.add, size: 16),
                         label:
                             const Text("Add", style: TextStyle(fontSize: 12)),
@@ -1467,7 +1559,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                           return SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
                             child: ConstrainedBox(
-                              constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                              constraints: BoxConstraints(
+                                  minWidth: constraints.maxWidth),
                               child: DataTable(
                                 headingRowHeight: 40,
                                 dataRowMinHeight: 44,
@@ -1479,7 +1572,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                       width: speciesWidth,
                                       child: const Text(
                                         'Species',
-                                        style: TextStyle(fontWeight: FontWeight.w700),
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w700),
                                       ),
                                     ),
                                   ),
@@ -1489,7 +1583,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                       width: countWidth,
                                       child: const Text(
                                         'Seedling Count',
-                                        style: TextStyle(fontWeight: FontWeight.w700),
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w700),
                                       ),
                                     ),
                                   ),
@@ -1498,7 +1593,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                       width: actionsWidth,
                                       child: const Text(
                                         'Actions',
-                                        style: TextStyle(fontWeight: FontWeight.w700),
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w700),
                                       ),
                                     ),
                                   ),
@@ -1527,7 +1623,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                           child: Row(
                                             children: [
                                               IconButton(
-                                                onPressed: () => _editSeedling(index),
+                                                onPressed: () =>
+                                                    _editSeedling(index),
                                                 icon: const Icon(
                                                   Icons.edit_rounded,
                                                   size: 18,
@@ -1536,7 +1633,8 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                                 tooltip: 'Edit',
                                               ),
                                               IconButton(
-                                                onPressed: () => _removeSeedling(index),
+                                                onPressed: () =>
+                                                    _removeSeedling(index),
                                                 icon: const Icon(
                                                   Icons.delete_outline_rounded,
                                                   size: 18,
@@ -1778,11 +1876,11 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                                   ),
                                                 ),
                                                 if (capturedCoordinates[i]
-                                                      ['photoPath'] !=
-                                                    null ||
-                                                  capturedCoordinates[i]
-                                                      ['photoUrl'] !=
-                                                    null)
+                                                            ['photoPath'] !=
+                                                        null ||
+                                                    capturedCoordinates[i]
+                                                            ['photoUrl'] !=
+                                                        null)
                                                   Padding(
                                                     padding:
                                                         const EdgeInsets.only(
@@ -1953,4 +2051,3 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
     );
   }
 }
-

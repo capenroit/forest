@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
@@ -16,11 +17,13 @@ import '../widget/polygon_calculator.dart';
 class MarineProtectedAreaForm extends StatefulWidget {
   final VoidCallback onSave;
   final VoidCallback onCancel;
+  final MarineProtectedArea? initialData;
 
   const MarineProtectedAreaForm({
     super.key,
     required this.onSave,
     required this.onCancel,
+    this.initialData,
   });
 
   @override
@@ -34,15 +37,18 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
   late TextEditingController _nameController;
   late TextEditingController _areaController;
   late TextEditingController _ordinanceController;
+  late TextEditingController _dateController;
 
   LookupOption? _selectedMunicipality;
   String? _selectedBarangay;
   List<LookupOption> _municipalityOptions = [];
   List<String> _filteredBarangays = [];
+  DateTime _selectedDate = DateTime.now();
 
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isLoadingBarangays = false;
+  bool _didApplyInitialMunicipality = false;
 
   bool _locationPermissionGranted = false;
   bool _isCapturingLocation = false;
@@ -55,6 +61,19 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     _nameController = TextEditingController();
     _areaController = TextEditingController();
     _ordinanceController = TextEditingController();
+    _dateController = TextEditingController();
+
+    final initial = widget.initialData;
+    if (initial != null) {
+      _nameController.text = initial.name.trim();
+      _ordinanceController.text = initial.ordinance?.trim() ?? '';
+      _areaController.text = initial.area?.toString() ?? '';
+      _selectedBarangay =
+          initial.barangay.trim().isEmpty ? null : initial.barangay.trim();
+      _selectedDate = initial.date;
+    }
+    _dateController.text = _formatDateOnly(_selectedDate);
+
     _requestLocationPermission();
     _loadMunicipalityOptions();
   }
@@ -64,7 +83,30 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     _nameController.dispose();
     _areaController.dispose();
     _ordinanceController.dispose();
+    _dateController.dispose();
     super.dispose();
+  }
+
+  String _formatDateOnly(DateTime value) {
+    final year = value.year.toString().padLeft(4, '0');
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
+  Future<void> _selectDate(BuildContext context) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2101),
+    );
+    if (picked != null) {
+      setState(() {
+        _selectedDate = picked;
+        _dateController.text = _formatDateOnly(picked);
+      });
+    }
   }
 
   Future<void> _loadMunicipalityOptions() async {
@@ -73,6 +115,37 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       final options = await LookupService.getMunicipalityOptions();
       if (!mounted) return;
       setState(() => _municipalityOptions = options);
+
+      final initial = widget.initialData;
+      if (!_didApplyInitialMunicipality && initial != null) {
+        _didApplyInitialMunicipality = true;
+        final initialMunicipality = initial.municipality.trim().toLowerCase();
+
+        LookupOption? match;
+        for (final option in options) {
+          if (option.name.trim().toLowerCase() == initialMunicipality) {
+            match = option;
+            break;
+          }
+        }
+
+        if (match != null) {
+          if (!mounted) return;
+          setState(() => _selectedMunicipality = match);
+          await _loadBarangaysForMunicipality(match.id);
+
+          if (!mounted || _selectedBarangay == null) return;
+          final selectedLower = _selectedBarangay!.trim().toLowerCase();
+          String? matchedBarangay;
+          for (final name in _filteredBarangays) {
+            if (name.trim().toLowerCase() == selectedLower) {
+              matchedBarangay = name;
+              break;
+            }
+          }
+          setState(() => _selectedBarangay = matchedBarangay);
+        }
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -358,8 +431,10 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       return;
     }
 
+    final isEditing = widget.initialData?.id != null;
+
     final userSeqId = AuthSession.currentUser?.seqId;
-    if (userSeqId == null) {
+    if (!isEditing && userSeqId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Unable to save data: missing user id. Try signing out and back in.'),
@@ -374,14 +449,25 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     setState(() => _isSaving = true);
 
     try {
-      final savedArea = await ApiService.saveMarineProtectedArea(
-        userId: userSeqId,
-        name: name,
-        municipality: municipality,
-        barangay: barangay,
-        area: parsedArea,
-        ordinance: ordinance.isEmpty ? null : ordinance,
-      );
+      final savedArea = isEditing
+          ? await ApiService.updateMarineProtectedArea(
+              id: widget.initialData!.id!,
+              name: name,
+              municipality: municipality,
+              barangay: barangay,
+              date: _selectedDate,
+              area: parsedArea,
+              ordinance: ordinance.isEmpty ? null : ordinance,
+            )
+          : await ApiService.saveMarineProtectedArea(
+              userId: userSeqId!,
+              name: name,
+              municipality: municipality,
+              barangay: barangay,
+              date: _selectedDate,
+              area: parsedArea,
+              ordinance: ordinance.isEmpty ? null : ordinance,
+            );
 
       final areaId = (savedArea['id'] as num?)?.toInt();
 
@@ -695,6 +781,31 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
                                           child: Text(value),
                                         );
                                       }).toList(),
+                  ),
+                  const SizedBox(height: 14),
+
+                  Text(
+                    'Date *',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _dateController,
+                    enabled: !_isLoading,
+                    readOnly: true,
+                    onTap: _isLoading ? null : () => _selectDate(context),
+                    decoration: _modernInputDecoration(
+                      label: '',
+                      icon: Icons.calendar_today_rounded,
+                      suffixIcon: Icon(
+                        Icons.arrow_drop_down_rounded,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 14),
 

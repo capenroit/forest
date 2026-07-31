@@ -15,6 +15,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../service/api_service.dart';
 import '../widget/export_options_dialog.dart';
+import '../widget/side_panel.dart';
 import '../widget/web_helper.dart' as web_helper;
 
 class ReportPage extends StatelessWidget {
@@ -145,12 +146,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
           _resolveTableNameForSelection(_selectedProjectTypeName);
 
       final query = Supabase.instance.client.from(tableName).select('*');
-      final filteredQuery = tableName == 'tree_growing' &&
-              _selectedProjectTypeId != null
-          ? query.eq('project_type_id', _selectedProjectTypeId!)
-          : tableName == 'seedling_transaction' && _isSeedlingRequestSelected
-              ? query.eq('transaction_type_id', 2)
-              : query;
+      var filteredQuery = query;
+      if (tableName == 'tree_growing' && _selectedProjectTypeId != null) {
+        filteredQuery = filteredQuery.eq('project_type_id', _selectedProjectTypeId!);
+      } else if (tableName == 'seedling_transaction' && _isSeedlingRequestSelected) {
+        filteredQuery = filteredQuery.eq('transaction_type_id', 2);
+      } else if (tableName == 'crm_habitat_assssment' ||
+          tableName == 'crm_marine_protected') {
+        filteredQuery = filteredQuery.eq('is_deleted', 0);
+      }
 
       final completer = Completer<List<dynamic>>();
 
@@ -191,6 +195,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         mapData = await _attachTreeSurvivalSpeciesRows(mapData);
       } else if (tableName == 'seed_donation') {
         mapData = await _attachSeedDonationSpeciesRows(mapData);
+      } else if (tableName == 'crm_habitat_assssment') {
+        mapData = await _attachHabitatAssessmentSummaryRows(mapData);
       }
 
       final filteredData = await compute(
@@ -245,9 +251,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
   /// Expands each tree_growing activity row into one row per species/count
   /// captured in tree_growing_data, joined via
   /// tree_growing.seq_id == tree_growing_data.tree_growing_id.
+  ///
+  /// Mangrove Planting's report doesn't show species/tree-count columns at
+  /// all (see _getColumnsToDisplay), so it's passed through as one row per
+  /// activity instead — otherwise an activity with no seedlings recorded yet
+  /// would be silently omitted from the report entirely.
   Future<List<Map<String, dynamic>>> _attachTreeGrowingSpeciesRows(
     List<Map<String, dynamic>> rows,
   ) async {
+    if (_isMangrovePlantingSelected) return rows;
+
     final seqIds = rows
         .map((row) => (row['seq_id'] as num?)?.toInt())
         .whereType<int>()
@@ -284,6 +297,54 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
 
     return flattened;
+  }
+
+  /// Summarizes each habitat assessment row with its species names and total
+  /// count from crm_habitat_assssment_data — matching what the activity list
+  /// card shows (species joined by ", ", counts summed). Unlike
+  /// _attachTreeGrowingSpeciesRows this keeps one row per assessment rather
+  /// than expanding to one row per species, and never omits an assessment
+  /// for having no species rows yet.
+  Future<List<Map<String, dynamic>>> _attachHabitatAssessmentSummaryRows(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final ids = rows
+        .map((row) => (row['id'] as num?)?.toInt())
+        .whereType<int>()
+        .toList();
+
+    var speciesRowsByAssessment = <int, List<Map<String, dynamic>>>{};
+    if (ids.isNotEmpty) {
+      try {
+        speciesRowsByAssessment =
+            await ApiService.getHabitatAssessmentDataByAssessmentIds(ids);
+      } catch (e) {
+        debugPrint('⚠️ Error fetching crm_habitat_assssment_data rows: $e');
+      }
+    }
+
+    return rows.map((row) {
+      final id = (row['id'] as num?)?.toInt();
+      final speciesRows =
+          id != null ? speciesRowsByAssessment[id] ?? const [] : const [];
+
+      final speciesNames = speciesRows
+          .map((r) => (r['species_name'] ?? '').toString().trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .join(', ');
+
+      final totalCount = speciesRows.fold<int>(
+        0,
+        (sum, r) => sum + ((r['count'] as num?)?.toInt() ?? 0),
+      );
+
+      return {
+        ...row,
+        'species': speciesNames.isEmpty ? 'Unspecified' : speciesNames,
+        'total_count': totalCount,
+      };
+    }).toList();
   }
 
   /// Expands each flora_fauna_survey row into one row per species captured
@@ -336,6 +397,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
   /// species (seed_id == tree_growing_data.id), so this just attaches the
   /// species name/count and the tree_growing activity's name/location —
   /// no fan-out needed.
+  ///
+  /// tree_survival_monitoring rows aren't tagged with a project type of
+  /// their own — activity_id just points into tree_growing, which is shared
+  /// by Tree Growing (project_type_id 1) and Mangrove Planting (6). Only
+  /// keep rows whose activity matches whichever of those two is selected —
+  /// same disambiguation the recent-activity list pages already do.
   Future<List<Map<String, dynamic>>> _attachTreeSurvivalSpeciesRows(
     List<Map<String, dynamic>> rows,
   ) async {
@@ -347,12 +414,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     if (activityIds.isEmpty) return [];
 
+    final expectedProjectTypeId = _isMangroveSurvivalSelected ? 6 : 1;
+
     Map<int, Map<String, dynamic>> treeGrowingBySeqId;
     Map<int, Map<String, dynamic>> seedRowById;
     try {
       final treeGrowingRows = await Supabase.instance.client
           .from('tree_growing')
-          .select('seq_id, activity_name, municipality, barangay, area_cover')
+          .select(
+              'seq_id, activity_name, municipality, barangay, area_cover, project_type_id')
           .inFilter('seq_id', activityIds);
 
       treeGrowingBySeqId = {
@@ -386,6 +456,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       }
 
       final treeGrowingRow = treeGrowingBySeqId[activityId];
+      if (_parseNullableInt(treeGrowingRow?['project_type_id']) !=
+          expectedProjectTypeId) {
+        // Belongs to the other project type sharing this table — omit it.
+        continue;
+      }
+
       final quarter = row['quarter'];
       final quarterLabel = quarter == null ? '' : 'Q$quarter';
 
@@ -734,6 +810,22 @@ class _ReportsScreenState extends State<ReportsScreen> {
   bool get _isSeedlingRequestSelected =>
       _selectedProjectTypeName.trim().toLowerCase() == 'seedling request';
 
+  /// Mangrove Planting shares the tree_growing table with Tree Growing
+  /// (rows are told apart by project_type_id), so _currentTableName alone
+  /// can't distinguish them either — same pattern as _isSeedlingRequestSelected
+  /// above.
+  bool get _isMangrovePlantingSelected =>
+      _selectedProjectTypeName.trim().toLowerCase() == 'mangrove planting';
+
+  /// Monitoring of Mangrove Survival shares the tree_survival_monitoring
+  /// table with Monitoring Tree Survival — same pattern as
+  /// _isMangrovePlantingSelected above, one level further removed (rows are
+  /// told apart via their linked tree_growing activity's project_type_id,
+  /// not a column on tree_survival_monitoring itself).
+  bool get _isMangroveSurvivalSelected =>
+      _selectedProjectTypeName.trim().toLowerCase() ==
+      'monitoring of mangrove survival';
+
   String _getDateFieldName() {
     switch (_currentTableName) {
       case 'flora_fauna_survey':
@@ -744,6 +836,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 'created_at';
       case 'seed_donation':
         return 'donated_date';
+      case 'crm_habitat_assssment':
+      case 'crm_marine_protected':
+        return 'date';
       default:
         return 'planting_date';
     }
@@ -757,6 +852,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 'tree_growing';
       case 'monitoring tree survival':
       case 'monitoring':
+      case 'monitoring of mangrove survival':
         return 'tree_survival_monitoring';
       case 'flora and fauna survey':
       case 'flora_fauna_survey':
@@ -768,6 +864,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'seed for a forest':
       case 'seed_donation':
         return 'seed_donation';
+      case 'habitat assessment':
+      case 'crm_habitat_assssment':
+        return 'crm_habitat_assssment';
+      case 'marine protected area':
+      case 'crm_marine_protected':
+        return 'crm_marine_protected';
       default:
         return 'tree_growing';
     }
@@ -833,6 +935,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
+      drawer: const SidePanel(),
       body: Row(
         children: [
           Expanded(
@@ -846,9 +949,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     children: [
                       Row(
                         children: [
-                          IconButton(
-                            icon: const Icon(Icons.arrow_back),
-                            onPressed: () => Navigator.of(context).maybePop(),
+                          Builder(
+                            builder: (context) => IconButton(
+                              icon: const Icon(Icons.menu),
+                              onPressed: () =>
+                                  Scaffold.of(context).openDrawer(),
+                            ),
                           ),
                           const SizedBox(width: 8),
                           const Text(
@@ -1233,6 +1339,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'flora_fauna_survey':
         return 'Flora and Fauna Survey Report';
       case 'tree_survival_monitoring':
+        if (_isMangroveSurvivalSelected) {
+          return 'Monitoring of Mangrove Survival Report';
+        }
         return 'Monitoring Tree Survival Report';
       case 'seedling_transaction':
         return _isSeedlingRequestSelected
@@ -1240,6 +1349,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
             : 'Seedling Inventory Report';
       case 'seed_donation':
         return 'Seed for a Forest Report';
+      case 'tree_growing':
+        if (_isMangrovePlantingSelected) return 'Mangrove Planting Report';
+        return 'Tree Growing Report';
+      case 'crm_habitat_assssment':
+        return 'Habitat Assessment Report';
+      case 'crm_marine_protected':
+        return 'Marine Protected Area Report';
       default:
         return 'Tree Growing Report';
     }
@@ -1256,6 +1372,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'seedling_transaction':
         return _isSeedlingRequestSelected ? 'no' : 'sort_order';
       case 'seed_donation':
+        return 'id';
+      case 'crm_habitat_assssment':
+      case 'crm_marine_protected':
         return 'id';
       default:
         return 'seq_id';
@@ -1312,6 +1431,47 @@ class _ReportsScreenState extends State<ReportsScreen> {
           'status',
           'donated_date',
         ];
+      case 'tree_growing':
+        if (_isMangrovePlantingSelected) {
+          return [
+            'seq_id',
+            'activity_name',
+            'area_cover',
+            'municipality',
+            'barangay',
+            'planting_date',
+          ];
+        }
+        return [
+          'seq_id',
+          'activity_name',
+          'tree_species',
+          'number_of_trees',
+          'area_cover',
+          'municipality',
+          'barangay',
+          'planting_date',
+        ];
+      case 'crm_habitat_assssment':
+        return [
+          'id',
+          'type_assessment',
+          'municipality',
+          'barangay',
+          'species',
+          'total_count',
+          'date',
+        ];
+      case 'crm_marine_protected':
+        return [
+          'id',
+          'name',
+          'municipality',
+          'barangay',
+          'ordinance',
+          'area',
+          'date',
+        ];
       default:
         return [
           'seq_id',
@@ -1366,6 +1526,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
       'survive': 'Survive',
       'status': 'Status',
       'donated_date': 'Date',
+      'type_assessment': 'Type of Assessment',
+      'total_count': 'Total Count',
+      'name': 'Name',
+      'ordinance': 'Ordinance',
+      'created_at': 'Date',
     };
     return nameMap[columnName] ?? columnName.replaceAll('_', ' ').toUpperCase();
   }
@@ -1417,6 +1582,15 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'planting_date':
       case 'survey_date':
       case 'donated_date':
+      case 'created_at':
+        return 0.14;
+      case 'type_assessment':
+        return 0.16;
+      case 'total_count':
+        return 0.12;
+      case 'name':
+        return 0.16;
+      case 'ordinance':
         return 0.14;
       default:
         return 0.10;

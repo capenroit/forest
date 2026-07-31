@@ -47,7 +47,6 @@ class _DashboardPageState extends State<DashboardPage>
   final GlobalKey _mapCaptureKey = GlobalKey();
   bool _isCapturingMap = false;
 
-  List<Map<String, dynamic>> _allPhotoUrlRows = [];
   List<Map<String, dynamic>> _allTreeGrowingRows = [];
   Set<int> _treeGrowingIdsWithSpeciesData = {};
 
@@ -232,12 +231,6 @@ class _DashboardPageState extends State<DashboardPage>
         return;
       }
 
-      final photoUrlResponse = await Supabase.instance.client
-          .from('photourl_area')
-          .select('id, activity_id, latitude, longitude')
-          .eq('isDeleted', 0)
-          .timeout(const Duration(seconds: 5));
-
       final treeGrowingResponse = await Supabase.instance.client
           .from('tree_growing')
           .select('*')
@@ -277,7 +270,6 @@ class _DashboardPageState extends State<DashboardPage>
           .toSet();
 
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('photourl_areas_json', jsonEncode(photoUrlResponse));
       await prefs.setString('tree_growing_json', jsonEncode(treeGrowingResponse));
       await prefs.setString(
         'tree_growing_data_ids_json',
@@ -292,9 +284,6 @@ class _DashboardPageState extends State<DashboardPage>
       );
       await prefs.setString('markers_cache_date', DateTime.now().toIso8601String());
 
-      final typedPhotoRows = photoUrlResponse
-          .map((row) => Map<String, dynamic>.from(row as Map))
-          .toList();
       final typedTreeRows = treeGrowingResponse
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
@@ -309,13 +298,13 @@ class _DashboardPageState extends State<DashboardPage>
       _floraFaunaIdsWithSpeciesData = floraFaunaIdsWithSpeciesData;
 
       final markers = [
-        ..._buildMarkersFromData(typedPhotoRows, typedTreeRows,
+        ..._buildMarkersFromData(typedTreeRows,
             locationResponse: typedLocationRows),
         ..._buildFloraFaunaMarkersFromData(
             typedLocationRows, typedFloraFaunaRows),
       ];
       final polygons = [
-        ..._buildPolygonsFromData(typedPhotoRows, typedTreeRows,
+        ..._buildPolygonsFromData(typedTreeRows,
             locationResponse: typedLocationRows),
         ..._buildFloraFaunaPolygonsFromData(
             typedLocationRows, typedFloraFaunaRows),
@@ -323,7 +312,6 @@ class _DashboardPageState extends State<DashboardPage>
 
       if (!mounted) return;
       setState(() {
-        _allPhotoUrlRows = typedPhotoRows;
         _allTreeGrowingRows = typedTreeRows;
         _allLocationRows = typedLocationRows;
         _allFloraFaunaRows = typedFloraFaunaRows;
@@ -340,17 +328,14 @@ class _DashboardPageState extends State<DashboardPage>
   Future<void> _loadTreeGrowingMarkersFromCache() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final photoUrlJson = prefs.getString('photourl_areas_json');
       final treeGrowingJson = prefs.getString('tree_growing_json');
 
-      if (photoUrlJson == null || treeGrowingJson == null) {
+      if (treeGrowingJson == null) {
         if (!mounted) return;
         setState(() => _isLoadingMarkers = false);
         return;
       }
 
-      final photoUrlResponse =
-          List<Map<String, dynamic>>.from(jsonDecode(photoUrlJson) as List);
       final treeGrowingResponse =
           List<Map<String, dynamic>>.from(jsonDecode(treeGrowingJson) as List);
 
@@ -381,12 +366,12 @@ class _DashboardPageState extends State<DashboardPage>
           : {};
 
       final markers = [
-        ..._buildMarkersFromData(photoUrlResponse, treeGrowingResponse,
+        ..._buildMarkersFromData(treeGrowingResponse,
             locationResponse: locationResponse),
         ..._buildFloraFaunaMarkersFromData(locationResponse, floraFaunaResponse),
       ];
       final polygons = [
-        ..._buildPolygonsFromData(photoUrlResponse, treeGrowingResponse,
+        ..._buildPolygonsFromData(treeGrowingResponse,
             locationResponse: locationResponse),
         ..._buildFloraFaunaPolygonsFromData(
             locationResponse, floraFaunaResponse),
@@ -394,7 +379,6 @@ class _DashboardPageState extends State<DashboardPage>
 
       if (!mounted) return;
       setState(() {
-        _allPhotoUrlRows = photoUrlResponse;
         _allTreeGrowingRows = treeGrowingResponse;
         _allLocationRows = locationResponse;
         _allFloraFaunaRows = floraFaunaResponse;
@@ -492,12 +476,12 @@ class _DashboardPageState extends State<DashboardPage>
 
   void _applyProjectTypeFilter() {
     final markers = [
-      ..._buildMarkersFromData(_allPhotoUrlRows, _allTreeGrowingRows,
+      ..._buildMarkersFromData(_allTreeGrowingRows,
           locationResponse: _allLocationRows),
       ..._buildFloraFaunaMarkersFromData(_allLocationRows, _allFloraFaunaRows),
     ];
     final polygons = [
-      ..._buildPolygonsFromData(_allPhotoUrlRows, _allTreeGrowingRows,
+      ..._buildPolygonsFromData(_allTreeGrowingRows,
           locationResponse: _allLocationRows),
       ..._buildFloraFaunaPolygonsFromData(
           _allLocationRows, _allFloraFaunaRows),
@@ -516,10 +500,9 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   /// Rows from `location` that belong to the Tree Growing flow
-  /// (activity_type_id == 1), i.e. points captured after the switch away
-  /// from photourl_area-only storage. Filtered explicitly so a numeric
-  /// activity_id collision with another activity type (e.g. a Flora &
-  /// Fauna survey id) can never be mistaken for a tree growing point.
+  /// (activity_type_id == 1). Filtered explicitly so a numeric activity_id
+  /// collision with another activity type (e.g. a Flora & Fauna survey id)
+  /// can never be mistaken for a tree growing point.
   List<dynamic> _treeGrowingLocationRows(List<dynamic> locationResponse) {
     return locationResponse.where((item) {
       final row = Map<String, dynamic>.from(item as Map);
@@ -528,7 +511,6 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   List<Marker> _buildMarkersFromData(
-    List<dynamic> photoUrlResponse,
     List<dynamic> treeGrowingResponse, {
     List<dynamic> locationResponse = const [],
   }) {
@@ -541,10 +523,7 @@ class _DashboardPageState extends State<DashboardPage>
       }
     }
 
-    final combinedRows = [
-      ...photoUrlResponse,
-      ..._treeGrowingLocationRows(locationResponse),
-    ];
+    final combinedRows = _treeGrowingLocationRows(locationResponse);
 
     final markers = <Marker>[];
     final seenSeqIds = <int>{};
@@ -564,8 +543,8 @@ class _DashboardPageState extends State<DashboardPage>
       if (!_matchesSelectedProjectType(activityData)) continue;
       if (!_treeGrowingIdsWithSpeciesData.contains(seqId)) continue;
 
-      // An activity can have several photourl_area points (one per photo/
-      // coordinate) — collapse them to a single marker per seq_id.
+      // An activity can have several location points — collapse them to a
+      // single marker per seq_id.
       if (!seenSeqIds.add(seqId)) continue;
 
       markers.add(
@@ -584,7 +563,6 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   List<Polygon> _buildPolygonsFromData(
-    List<dynamic> photoUrlResponse,
     List<dynamic> treeGrowingResponse, {
     List<dynamic> locationResponse = const [],
   }) {
@@ -596,10 +574,7 @@ class _DashboardPageState extends State<DashboardPage>
       activityMap[row['seq_id']] = row;
     }
 
-    final combinedRows = [
-      ...photoUrlResponse,
-      ..._treeGrowingLocationRows(locationResponse),
-    ];
+    final combinedRows = _treeGrowingLocationRows(locationResponse);
 
     for (final item in combinedRows) {
       final row = Map<String, dynamic>.from(item as Map);
@@ -1119,13 +1094,7 @@ class _DashboardPageState extends State<DashboardPage>
           speciesGroupRows.add(MapEntry('Seedling Name', seedlingName));
           speciesGroupRows.add(MapEntry('Seedling Count', seedlingCount));
 
-          final coordinateRows = await Supabase.instance.client
-              .from('photourl_area')
-              .select('latitude, longitude')
-              .eq('activity_id', activityId)
-              .eq('isDeleted', 0);
-
-          final migratedCoordinateRows = await Supabase.instance.client
+          final locationCoordinateRows = await Supabase.instance.client
               .from('location')
               .select('latitude, longitude')
               .eq('activity_id', activityId)
@@ -1133,10 +1102,8 @@ class _DashboardPageState extends State<DashboardPage>
               .eq('isDeleted', 0);
 
           coords.addAll(
-            [
-              ...List<Map<String, dynamic>>.from(coordinateRows as List),
-              ...List<Map<String, dynamic>>.from(migratedCoordinateRows as List),
-            ].map((row) {
+            List<Map<String, dynamic>>.from(locationCoordinateRows as List)
+                .map((row) {
                   final latitude = _toDouble(row['latitude']);
                   final longitude = _toDouble(row['longitude']);
                   if (latitude == null || longitude == null) return null;

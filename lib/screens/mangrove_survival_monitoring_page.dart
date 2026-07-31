@@ -1,18 +1,19 @@
 import 'package:flutter/material.dart';
 
-import '../data_entry/monitoring_tree_survival_form.dart';
+import '../data_entry/monitoring_mangrove_survival_form.dart';
 import '../service/api_service.dart';
 import '../widget/side_panel.dart';
 
-class TreeSurvivalMonitoringPage extends StatefulWidget {
-  const TreeSurvivalMonitoringPage({super.key});
+class MangroveSurvivalMonitoringPage extends StatefulWidget {
+  const MangroveSurvivalMonitoringPage({super.key});
 
   @override
-  State<TreeSurvivalMonitoringPage> createState() =>
-      _TreeSurvivalMonitoringPageState();
+  State<MangroveSurvivalMonitoringPage> createState() =>
+      _MangroveSurvivalMonitoringPageState();
 }
 
-class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage> {
+class _MangroveSurvivalMonitoringPageState
+    extends State<MangroveSurvivalMonitoringPage> {
   final List<Map<String, dynamic>> _items = [];
   bool _isLoading = true;
   String? _errorMessage;
@@ -43,7 +44,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
             Icon(Icons.monitor_heart_rounded, color: Colors.white, size: 32),
             SizedBox(width: 12),
             Text(
-              'Monitoring of Tree Survival',
+              'Monitoring of Mangrove Survival',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -133,7 +134,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
     if (_items.isEmpty) {
       return const Center(
         child: Text(
-          'No tree survival records yet.',
+          'No mangrove survival records yet.',
           style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
         ),
       );
@@ -155,7 +156,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
     final municipality = (row['municipality'] ?? '').toString().trim();
     final barangay = (row['barangay'] ?? '').toString().trim();
     final quarter = (row['quarter'] as num?)?.toInt();
-    final treesSurvived =
+    final mangrovesSurvived =
         (row['number_tree_survived'] as num?)?.toInt() ??
             (row['number_tree_sur'] as num?)?.toInt() ??
             0;
@@ -189,12 +190,6 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
                       child: _buildLabelValue(
                         label: 'Activity Name',
                         value: activityName.isNotEmpty ? activityName : 'N/A',
-                        valueStyle: const TextStyle(
-                          fontSize: 24,
-                          height: 1.1,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF25273B),
-                        ),
                       ),
                     ),
                     const SizedBox(width: 14),
@@ -226,7 +221,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
                       ),
                     ),
                     const SizedBox(width: 14),
-                    _buildTreesSurvived(treesSurvived),
+                    _buildMangrovesSurvived(mangrovesSurvived),
                   ],
                 ),
               ],
@@ -300,7 +295,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
           overflow: TextOverflow.ellipsis,
           style: valueStyle ??
               const TextStyle(
-                fontSize: 18,
+                fontSize: 14,
                 height: 1.2,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF25273B),
@@ -335,7 +330,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
               _formatDate(date),
               style: const TextStyle(
                 fontSize: 14,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w700,
                 color: Color(0xFF666A80),
                 height: 1,
               ),
@@ -346,12 +341,12 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
     );
   }
 
-  Widget _buildTreesSurvived(int treesSurvived) {
+  Widget _buildMangrovesSurvived(int mangrovesSurvived) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         const Text(
-          'Trees Survived',
+          'Mangroves Survived',
           style: TextStyle(
             fontSize: 12,
             color: Color(0xFF777A90),
@@ -360,9 +355,9 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         ),
         const SizedBox(height: 2),
         Text(
-          '$treesSurvived',
+          '$mangrovesSurvived',
           style: const TextStyle(
-            fontSize: 33,
+            fontSize: 18,
             height: 1,
             fontWeight: FontWeight.w700,
             color: Color(0xFF22232F),
@@ -397,8 +392,8 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
 
       // tree_survival_monitoring rows aren't tagged with a project type of
       // their own — activity_id just points into tree_growing, which is
-      // shared with Mangrove Planting (project_type_id 6). Only keep rows
-      // whose activity actually is a Tree Growing one (project_type_id 1).
+      // shared with Tree Growing (project_type_id 1). Only keep rows whose
+      // activity actually is a Mangrove Planting one (project_type_id 6).
       final enrichedItems = items
           .map((row) {
             final activityId = (row['activity_id'] as num?)?.toInt();
@@ -411,7 +406,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
               '_project_type_id': info?['project_type_id'],
             };
           })
-          .where((row) => row['_project_type_id'] == 1)
+          .where((row) => row['_project_type_id'] == 6)
           .toList();
 
       final mergedItems = _mergeRecordsByActivity(enrichedItems);
@@ -487,7 +482,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
           borderRadius: BorderRadius.circular(12),
         ),
         insetPadding: const EdgeInsets.all(16),
-        child: MonitoringTreeSurvivalForm(
+        child: MonitoringMangroveSurvivalForm(
           municipalities: const [],
           barangays: const [],
           onSave: () {
@@ -515,7 +510,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
           borderRadius: BorderRadius.circular(12),
         ),
         insetPadding: const EdgeInsets.all(16),
-        child: MonitoringTreeSurvivalForm(
+        child: MonitoringMangroveSurvivalForm(
           municipalities: const [],
           barangays: const [],
           initialRows: groupRows,
@@ -575,4 +570,3 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
     }
   }
 }
-

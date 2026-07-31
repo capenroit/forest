@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data_entry/seedling_request_form.dart';
 import '../widget/add_seedling_request_detail_dialog.dart';
+import '../widget/side_panel.dart';
 
 class _SeedlingRequestItem {
   final String transactionId;
@@ -72,10 +73,17 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: Row(
           children: const [
             Icon(Icons.assignment_outlined, color: Colors.white, size: 32),
