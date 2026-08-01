@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../data_entry/monitoring_tree_survival_form.dart';
+import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/side_panel.dart';
 
 class TreeSurvivalMonitoringPage extends StatefulWidget {
@@ -14,7 +16,10 @@ class TreeSurvivalMonitoringPage extends StatefulWidget {
 }
 
 class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage> {
+  static const int _treeGrowingProjectTypeId = 1;
+
   final List<Map<String, dynamic>> _items = [];
+  final List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -131,7 +136,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
       );
     }
 
-    if (_items.isEmpty) {
+    if (_items.isEmpty && _pendingItems.isEmpty) {
       return const Center(
         child: Text(
           'No tree survival records yet.',
@@ -140,14 +145,139 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
       );
     }
 
-    return ListView.separated(
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 6, 20, 88),
-      itemCount: _items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        return _buildActivityCard(_items[index]);
-      },
+      children: [
+        if (_pendingItems.isNotEmpty) ...[
+          _buildPendingSectionHeader(),
+          const SizedBox(height: 10),
+          for (final item in _pendingItems)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _buildPendingCard(item),
+            ),
+          const SizedBox(height: 6),
+        ],
+        for (final row in _items)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildActivityCard(row),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildPendingSectionHeader() {
+    return Row(
+      children: [
+        Icon(Icons.cloud_off_rounded, size: 16, color: Colors.orange.shade700),
+        const SizedBox(width: 6),
+        Text(
+          'Pending Sync',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: Colors.orange.shade800,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPendingCard(Map<String, dynamic> item) {
+    final localId = item['localId'] as String;
+    final payload = Map<String, dynamic>.from(item['payload'] as Map);
+    final activityName = (item['activityName'] ?? '').toString().trim();
+    final municipality = (item['municipality'] ?? '').toString().trim();
+    final barangay = (item['barangay'] ?? '').toString().trim();
+    final activityId = (payload['activityId'] as num?)?.toInt();
+    final quarter = (payload['quarter'] as num?)?.toInt();
+    final dateRaw = payload['date']?.toString() ?? '';
+    final parsedDate = DateTime.tryParse(dateRaw) ?? DateTime.now();
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => _openPendingEditDialog(localId, payload),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.orange.shade200),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.schedule_rounded,
+                          size: 14, color: Colors.orange.shade700),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Not yet synced',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.orange.shade800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    activityName.isNotEmpty
+                        ? activityName
+                        : (activityId != null
+                            ? 'Activity #$activityId'
+                            : 'Unknown activity'),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF25273B),
+                    ),
+                  ),
+                  if (municipality.isNotEmpty || barangay.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      [municipality, barangay]
+                          .where((s) => s.isNotEmpty)
+                          .join(' | '),
+                      style:
+                          const TextStyle(fontSize: 12, color: Color(0xFF777A90)),
+                    ),
+                  ],
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text(
+                        _formatDate(parsedDate),
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF666A80)),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        quarter != null ? 'Q$quarter' : 'N/A',
+                        style: const TextStyle(
+                            fontSize: 12, color: Color(0xFF666A80)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline, size: 20, color: Colors.red),
+              tooltip: 'Delete pending record',
+              onPressed: () => _confirmAndDeletePending(localId),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -383,6 +513,10 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
       });
     }
 
+    // Best-effort local read alongside the server load — never throws, so
+    // a failure of the server-backed list below is reported on its own.
+    final pendingFuture = _loadPendingItems();
+
     try {
       final items = await ApiService.getTreeSurvivalMonitoringRecords(
         limit: 200,
@@ -419,6 +553,8 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
 
       final mergedItems = _mergeRecordsByActivity(enrichedItems);
 
+      await pendingFuture;
+
       if (!mounted) return;
       setState(() {
         _items
@@ -428,11 +564,60 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         _errorMessage = null;
       });
     } catch (e) {
+      await pendingFuture;
       if (!mounted) return;
       setState(() {
         _isLoading = false;
         _errorMessage = 'Failed to load records: $e';
       });
+    }
+  }
+
+  /// Loads still-queued offline drafts and keeps only the ones belonging to
+  /// this page (i.e. whose `activityId` points at a Tree Growing activity,
+  /// project_type_id 1 — both survival-monitoring forms share the same
+  /// queue `type` string, so this is how the two pages tell their pending
+  /// items apart). Only activities that have actually synced at some point
+  /// (and are therefore in the local cache) are considered valid targets.
+  Future<void> _loadPendingItems() async {
+    try {
+      final pending = await OfflineSyncService.getPendingItems(
+        type: 'tree_survival_monitoring',
+      );
+      final cachedActivities =
+          await OfflineSyncService.getCachedActivities(_treeGrowingProjectTypeId);
+      final activitiesBySeqId = <int, TreePlanting>{
+        for (final activity in cachedActivities)
+          if (activity.seqId != null) activity.seqId!: activity,
+      };
+
+      final relevant = <Map<String, dynamic>>[];
+      for (final item in pending) {
+        final rawPayload = item['payload'];
+        if (rawPayload is! Map) continue;
+        final payload = Map<String, dynamic>.from(rawPayload);
+        final activityId = (payload['activityId'] as num?)?.toInt();
+        final activity =
+            activityId != null ? activitiesBySeqId[activityId] : null;
+        if (activity == null) continue;
+
+        relevant.add({
+          'localId': item['localId'],
+          'payload': payload,
+          'activityName': activity.activityName,
+          'municipality': activity.municipality,
+          'barangay': activity.barangay,
+        });
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _pendingItems
+          ..clear()
+          ..addAll(relevant);
+      });
+    } catch (_) {
+      // Best effort — leave whatever pending list we already had.
     }
   }
 
@@ -532,6 +717,61 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         ),
       ),
     );
+  }
+
+  Future<void> _openPendingEditDialog(
+      String localId, Map<String, dynamic> payload) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: MonitoringTreeSurvivalForm(
+          municipalities: const [],
+          barangays: const [],
+          pendingLocalId: localId,
+          pendingPayload: payload,
+          onSave: () {
+            Navigator.pop(dialogContext);
+            _loadRecentActivities(showLoader: false);
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmAndDeletePending(String localId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove pending record'),
+        content: const Text(
+          'This will delete this offline draft before it syncs. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    await OfflineSyncService.deletePendingItem(localId);
+    if (!mounted) return;
+    await _loadRecentActivities(showLoader: false);
   }
 
   Future<void> _confirmAndRemove(Map<String, dynamic> mergedRow) async {

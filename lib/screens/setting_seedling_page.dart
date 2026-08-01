@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../service/auth_session.dart';
 import '../service/seedling_list_service.dart';
 
 class SettingSeedlingPage extends StatefulWidget {
@@ -18,7 +19,7 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
   bool _isLoading = true;
   bool _isSaving = false;
   String? _errorMessage;
-  List<String> _seedlingNames = [];
+  List<Map<String, dynamic>> _seedlingRows = [];
   String _searchQuery = '';
 
   @override
@@ -34,12 +35,11 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
     });
 
     try {
-      final names = await _seedlingListService.getSeedlingNames();
-      final sorted = [...names]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      final rows = await _seedlingListService.getSeedlingRows();
 
       if (!mounted) return;
       setState(() {
-        _seedlingNames = sorted;
+        _seedlingRows = rows;
         _isLoading = false;
       });
     } catch (e) {
@@ -270,7 +270,9 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
       return;
     }
 
-    final exists = _seedlingNames.any((item) => item.toLowerCase() == name.toLowerCase());
+    final exists = _seedlingRows.any((row) =>
+        (row['seedling_name'] ?? '').toString().toLowerCase() ==
+        name.toLowerCase());
     if (exists) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -285,15 +287,14 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
     FocusManager.instance.primaryFocus?.unfocus();
 
     try {
-      final inserted = await _seedlingListService.addSeedlingName(
+      await _seedlingListService.addSeedlingName(
         seedlingName: name,
         details: details,
       ).timeout(const Duration(seconds: 12));
 
       if (!mounted) return;
       Navigator.pop(dialogContext);
-      final savedName = inserted['seedling_name']?.toString() ?? name;
-      Navigator.pop(context, savedName);
+      await _loadSeedlings();
     } on TimeoutException {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -317,6 +318,125 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
     }
   }
 
+  Future<void> _showEditSeedlingDialog(Map<String, dynamic> row) async {
+    final seqId = (row['seq_id'] as num).toInt();
+    final nameController =
+        TextEditingController(text: (row['seedling_name'] ?? '').toString());
+    final detailsController =
+        TextEditingController(text: (row['details'] ?? '').toString());
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('Edit Seedling'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Seedling Name'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: detailsController,
+                decoration: const InputDecoration(labelText: 'Details'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final name = nameController.text.trim();
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a seedling name.'),
+                      backgroundColor: Colors.orange,
+                    ),
+                  );
+                  return;
+                }
+
+                try {
+                  await _seedlingListService.updateSeedlingName(
+                    seqId: seqId,
+                    seedlingName: name,
+                    details: detailsController.text,
+                  );
+                  if (!mounted) return;
+                  Navigator.pop(dialogContext);
+                  await _loadSeedlings();
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to update seedling: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    nameController.dispose();
+    detailsController.dispose();
+  }
+
+  Future<void> _confirmDeleteSeedling(Map<String, dynamic> row) async {
+    final seqId = (row['seq_id'] as num).toInt();
+    final name = (row['seedling_name'] ?? '').toString();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Remove Seedling?'),
+        content: Text('Are you sure you want to remove "$name"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await _seedlingListService.deleteSeedlingName(seqId);
+      if (!mounted) return;
+      await _loadSeedlings();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name removed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to remove seedling: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -325,8 +445,11 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredSeedlings = _seedlingNames
-        .where((name) => name.toLowerCase().contains(_searchQuery.toLowerCase()))
+    final filteredSeedlings = _seedlingRows
+        .where((row) => (row['seedling_name'] ?? '')
+            .toString()
+            .toLowerCase()
+            .contains(_searchQuery.toLowerCase()))
         .toList();
 
     return Scaffold(
@@ -425,7 +548,7 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
                   ),
                 ),
               )
-            else if (_seedlingNames.isEmpty)
+            else if (_seedlingRows.isEmpty)
               const Card(
                 child: Padding(
                   padding: EdgeInsets.all(16),
@@ -441,10 +564,30 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
               )
             else
               ...filteredSeedlings.map(
-                (name) => Card(
+                (row) => Card(
                   child: ListTile(
                     leading: const Icon(Icons.eco),
-                    title: Text(name),
+                    title: Text((row['seedling_name'] ?? '').toString()),
+                    subtitle: (row['details'] ?? '').toString().isEmpty
+                        ? null
+                        : Text((row['details']).toString()),
+                    trailing: AuthSession.isAdmin
+                        ? PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'edit') {
+                                _showEditSeedlingDialog(row);
+                              } else if (value == 'remove') {
+                                _confirmDeleteSeedling(row);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                  value: 'edit', child: Text('Edit')),
+                              PopupMenuItem(
+                                  value: 'remove', child: Text('Remove')),
+                            ],
+                          )
+                        : null,
                   ),
                 ),
               ),

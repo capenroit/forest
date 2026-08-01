@@ -4,6 +4,7 @@ import '../data_entry/marine_protected_area_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/side_panel.dart';
 
 class MarineProtectedAreaPage extends StatefulWidget {
@@ -17,6 +18,7 @@ enum _ActivityCardMenuAction { edit, delete }
 
 class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
   final List<MarineProtectedArea> _items = [];
+  List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -33,6 +35,10 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
         _errorMessage = null;
       });
     }
+
+    // Pending (not-yet-synced) drafts are always loaded from local disk, so
+    // this never fails the way the server call below can.
+    await _loadPendingItems();
 
     try {
       final areas = await ApiService.getAllMarineProtectedAreas(limit: 200);
@@ -52,6 +58,13 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
         _errorMessage = 'Failed to load records: $e';
       });
     }
+  }
+
+  Future<void> _loadPendingItems() async {
+    final pending =
+        await OfflineSyncService.getPendingItems(type: 'marine_protected_area');
+    if (!mounted) return;
+    setState(() => _pendingItems = pending);
   }
 
   Future<void> _openAddDialog() async {
@@ -88,6 +101,128 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
           onCancel: () => Navigator.pop(dialogContext),
         ),
       ),
+    );
+  }
+
+  Future<void> _editPendingActivity(Map<String, dynamic> pendingItem) async {
+    final localId = pendingItem['localId'] as String;
+    final payload = Map<String, dynamic>.from(
+        (pendingItem['payload'] as Map?) ?? const {});
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        insetPadding: const EdgeInsets.all(16),
+        child: MarineProtectedAreaForm(
+          pendingLocalId: localId,
+          pendingPayload: payload,
+          onSave: () {
+            Navigator.pop(dialogContext);
+            _loadRecentActivities(showLoader: false);
+          },
+          onCancel: () => Navigator.pop(dialogContext),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deletePendingActivity(String localId) async {
+    await OfflineSyncService.deletePendingItem(localId);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Pending record deleted.'),
+        backgroundColor: Colors.green,
+      ),
+    );
+    await _loadPendingItems();
+  }
+
+  void _confirmDeletePendingActivity(Map<String, dynamic> pendingItem) {
+    final localId = pendingItem['localId'] as String;
+    final payload = Map<String, dynamic>.from(
+        (pendingItem['payload'] as Map?) ?? const {});
+    final name = (payload['name'] as String? ?? '').trim();
+
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+          contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          actionsPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          title: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: Color(0xFFC62828),
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Delete Pending Record?',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF22232F),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            name.isEmpty
+                ? 'This record has not synced yet. It will be permanently removed and cannot be recovered.'
+                : '"$name" has not synced yet. It will be permanently removed and cannot be recovered.',
+            style: const TextStyle(
+              fontSize: 14,
+              height: 1.35,
+              color: Color(0xFF5E6175),
+            ),
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                side: const BorderSide(color: Color(0xFFD4D7E5)),
+              ),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF4E526A), fontWeight: FontWeight.w600),
+              ),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.delete_rounded, size: 18),
+              label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w700)),
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                _deletePendingActivity(localId);
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -289,44 +424,196 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    final hasPending = _pendingItems.isNotEmpty;
+
+    Widget syncedSection;
     if (_errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                _errorMessage!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.redAccent),
-              ),
-              const SizedBox(height: 10),
-              ElevatedButton(
-                onPressed: _loadRecentActivities,
-                child: const Text('Retry'),
-              ),
-            ],
+      syncedSection = Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _errorMessage!,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.redAccent),
+            ),
+            const SizedBox(height: 10),
+            ElevatedButton(
+              onPressed: _loadRecentActivities,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    } else if (_items.isEmpty) {
+      syncedSection = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 40),
+        child: Center(
+          child: Text(
+            hasPending
+                ? 'No synced marine protected areas yet.'
+                : 'No marine protected areas yet.',
+            style: const TextStyle(fontSize: 16, color: Color(0xFF636780)),
           ),
         ),
       );
-    }
-
-    if (_items.isEmpty) {
-      return const Center(
-        child: Text(
-          'No marine protected areas yet.',
-          style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
-        ),
+    } else {
+      syncedSection = Column(
+        children: [
+          for (int i = 0; i < _items.length; i++) ...[
+            if (i > 0) const SizedBox(height: 12),
+            _buildActivityCard(_items[i]),
+          ],
+        ],
       );
     }
 
-    return ListView.separated(
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 6, 20, 88),
-      itemCount: _items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, index) => _buildActivityCard(_items[index]),
+      children: [
+        if (hasPending) ...[
+          _buildSectionHeader(
+            'Pending Sync',
+            icon: Icons.cloud_off_rounded,
+            color: Colors.orange.shade800,
+          ),
+          const SizedBox(height: 10),
+          for (int i = 0; i < _pendingItems.length; i++) ...[
+            if (i > 0) const SizedBox(height: 12),
+            _buildPendingCard(_pendingItems[i]),
+          ],
+          const SizedBox(height: 20),
+          _buildSectionHeader(
+            'Synced',
+            icon: Icons.cloud_done_rounded,
+            color: const Color(0xFF1B8B5E),
+          ),
+          const SizedBox(height: 10),
+        ],
+        syncedSection,
+      ],
+    );
+  }
+
+  Widget _buildSectionHeader(String label,
+      {required IconData icon, required Color color}) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPendingCard(Map<String, dynamic> pendingItem) {
+    final payload =
+        Map<String, dynamic>.from((pendingItem['payload'] as Map?) ?? const {});
+    final name = (payload['name'] as String? ?? '').trim();
+    final municipality = (payload['municipality'] as String? ?? '').trim();
+    final barangay = (payload['barangay'] as String? ?? '').trim();
+    final date = DateTime.tryParse(payload['date'] as String? ?? '');
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => _editPendingActivity(pendingItem),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.shade200),
+        ),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade100,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.cloud_off_rounded,
+                          size: 12, color: Colors.orange.shade800),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Pending sync',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.orange.shade800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: Color(0xFF8B8EA3),
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  tooltip: 'Delete pending record',
+                  onPressed: () => _confirmDeletePendingActivity(pendingItem),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Name',
+                    value: name.isEmpty ? 'N/A' : name,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Municipality',
+                    value: municipality.isEmpty ? 'N/A' : municipality,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Barangay',
+                    value: barangay.isEmpty ? 'N/A' : barangay,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: date != null
+                      ? _buildDate(date)
+                      : _buildLabelValue(label: 'Date', value: 'N/A'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 

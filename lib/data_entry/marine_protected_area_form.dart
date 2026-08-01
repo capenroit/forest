@@ -11,6 +11,7 @@ import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/edit_coordinate_dialog.dart';
 import '../widget/polygon_calculator.dart';
 
@@ -19,11 +20,20 @@ class MarineProtectedAreaForm extends StatefulWidget {
   final VoidCallback onCancel;
   final MarineProtectedArea? initialData;
 
+  /// When set, this form is editing a record that was saved offline and is
+  /// still sitting in the local sync queue (not yet on the server). In this
+  /// mode fields are seeded from [pendingPayload] instead of [initialData],
+  /// and saving rewrites the queued item instead of calling the network.
+  final String? pendingLocalId;
+  final Map<String, dynamic>? pendingPayload;
+
   const MarineProtectedAreaForm({
     super.key,
     required this.onSave,
     required this.onCancel,
     this.initialData,
+    this.pendingLocalId,
+    this.pendingPayload,
   });
 
   @override
@@ -63,8 +73,33 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     _ordinanceController = TextEditingController();
     _dateController = TextEditingController();
 
+    final pending = widget.pendingPayload;
     final initial = widget.initialData;
-    if (initial != null) {
+    if (pending != null) {
+      _nameController.text = (pending['name'] as String? ?? '').trim();
+      _ordinanceController.text = (pending['ordinance'] as String?)?.trim() ?? '';
+      final pendingArea = pending['area'];
+      _areaController.text = pendingArea != null ? pendingArea.toString() : '';
+      final pendingBarangay = (pending['barangay'] as String? ?? '').trim();
+      _selectedBarangay = pendingBarangay.isEmpty ? null : pendingBarangay;
+      _selectedDate =
+          DateTime.tryParse(pending['date'] as String? ?? '') ?? DateTime.now();
+
+      final pendingCoordinates = (pending['coordinates'] as List?) ?? const [];
+      for (final raw in pendingCoordinates) {
+        final coord = Map<String, dynamic>.from(raw as Map);
+        final lat = (coord['lat'] as num?)?.toDouble();
+        final lng = (coord['lng'] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+        final stablePhotoPath = coord['stablePhotoPath'] as String?;
+        _capturedCoordinates.add({
+          'lat': lat,
+          'lng': lng,
+          if (stablePhotoPath != null && stablePhotoPath.isNotEmpty)
+            'photoPath': stablePhotoPath,
+        });
+      }
+    } else if (initial != null) {
       _nameController.text = initial.name.trim();
       _ordinanceController.text = initial.ordinance?.trim() ?? '';
       _areaController.text = initial.area?.toString() ?? '';
@@ -116,10 +151,17 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       if (!mounted) return;
       setState(() => _municipalityOptions = options);
 
+      final pending = widget.pendingPayload;
       final initial = widget.initialData;
-      if (!_didApplyInitialMunicipality && initial != null) {
+      final seedMunicipalityName = pending != null
+          ? pending['municipality'] as String?
+          : initial?.municipality;
+
+      if (!_didApplyInitialMunicipality &&
+          seedMunicipalityName != null &&
+          seedMunicipalityName.trim().isNotEmpty) {
         _didApplyInitialMunicipality = true;
-        final initialMunicipality = initial.municipality.trim().toLowerCase();
+        final initialMunicipality = seedMunicipalityName.trim().toLowerCase();
 
         LookupOption? match;
         for (final option in options) {
@@ -413,6 +455,34 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     return 'public/$encodedBucket/$objectPath';
   }
 
+  /// Stages every captured coordinate's photo (if any) into stable offline
+  /// storage and returns the offline-queue coordinate shape expected by
+  /// `OfflineSyncService`'s `marine_protected_area` payload.
+  Future<List<Map<String, dynamic>>> _stageCoordinatesForOfflineQueue() async {
+    final staged = <Map<String, dynamic>>[];
+    for (final coord in _capturedCoordinates) {
+      final photoPath = coord['photoPath'] as String?;
+      final stablePhotoPath = await OfflineSyncService.stagePhoto(photoPath);
+      staged.add({
+        'lat': coord['lat'],
+        'lng': coord['lng'],
+        if (stablePhotoPath != null) 'stablePhotoPath': stablePhotoPath,
+      });
+    }
+    return staged;
+  }
+
+  void _showQueuedSnackBar() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Data was saved.'),
+        backgroundColor: Colors.orange,
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
   Future<void> _handleSave() async {
     if (_isSaving) return;
 
@@ -431,10 +501,11 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       return;
     }
 
+    final isPendingDraft = widget.pendingLocalId != null;
     final isEditing = widget.initialData?.id != null;
 
     final userSeqId = AuthSession.currentUser?.seqId;
-    if (!isEditing && userSeqId == null) {
+    if (!isEditing && !isPendingDraft && userSeqId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Unable to save data: missing user id. Try signing out and back in.'),
@@ -449,6 +520,73 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     setState(() => _isSaving = true);
 
     try {
+      // ── Editing a draft that is still sitting in the offline queue ──────
+      if (isPendingDraft) {
+        final stagedCoordinates = await _stageCoordinatesForOfflineQueue();
+        final pendingUserId =
+            (widget.pendingPayload?['userId'] as num?)?.toInt() ?? userSeqId;
+
+        final payload = {
+          'userId': pendingUserId,
+          'name': name,
+          'municipality': municipality,
+          'barangay': barangay,
+          'date': _selectedDate.toIso8601String(),
+          'area': parsedArea,
+          'ordinance': ordinance.isEmpty ? null : ordinance,
+          'coordinates': stagedCoordinates,
+        };
+
+        await OfflineSyncService.updatePendingItem(
+          widget.pendingLocalId!,
+          payload,
+        );
+
+        _showQueuedSnackBar();
+        widget.onSave();
+        return;
+      }
+      // ── End pending-draft path ───────────────────────────────────────────
+
+      // ── Offline path (create-only; editing an already-synced record
+      // requires an internet connection) ──────────────────────────────────
+      final isOnline = await OfflineSyncService.hasInternetConnection();
+      if (!mounted) return;
+      if (!isOnline) {
+        if (isEditing) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Editing requires an internet connection.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        final stagedCoordinates = await _stageCoordinatesForOfflineQueue();
+
+        final payload = {
+          'userId': userSeqId,
+          'name': name,
+          'municipality': municipality,
+          'barangay': barangay,
+          'date': _selectedDate.toIso8601String(),
+          'area': parsedArea,
+          'ordinance': ordinance.isEmpty ? null : ordinance,
+          'coordinates': stagedCoordinates,
+        };
+
+        await OfflineSyncService.queueGenericRecord(
+          type: 'marine_protected_area',
+          payload: payload,
+        );
+
+        _showQueuedSnackBar();
+        widget.onSave();
+        return;
+      }
+      // ── End offline path ─────────────────────────────────────────────────
+
       final savedArea = isEditing
           ? await ApiService.updateMarineProtectedArea(
               id: widget.initialData!.id!,
@@ -509,6 +647,7 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       );
 
       widget.onSave();
+      OfflineSyncService.syncAll().ignore();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

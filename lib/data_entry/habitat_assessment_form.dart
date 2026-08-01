@@ -11,6 +11,7 @@ import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/edit_coordinate_dialog.dart';
 import '../widget/polygon_calculator.dart';
 
@@ -26,11 +27,20 @@ class HabitatAssessmentForm extends StatefulWidget {
   final VoidCallback onCancel;
   final HabitatAssessment? initialData;
 
+  /// When non-null, this form is editing a record that was saved offline and
+  /// is still sitting in the local sync queue (not yet uploaded). Seeds all
+  /// fields from [pendingPayload] and, on save, rewrites the queued item in
+  /// place instead of talking to the network.
+  final String? pendingLocalId;
+  final Map<String, dynamic>? pendingPayload;
+
   const HabitatAssessmentForm({
     super.key,
     required this.onSave,
     required this.onCancel,
     this.initialData,
+    this.pendingLocalId,
+    this.pendingPayload,
   });
 
   @override
@@ -57,6 +67,7 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
   bool _isLoadingBarangays = false;
   bool _isLoadingSpecies = false;
   bool _didApplyInitialMunicipality = false;
+  String? _initialMunicipalityName;
 
   bool _locationPermissionGranted = false;
   bool _isCapturingLocation = false;
@@ -71,7 +82,53 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
     _dateController = TextEditingController();
 
     final initial = widget.initialData;
-    if (initial != null) {
+    final pendingPayload = widget.pendingPayload;
+
+    if (pendingPayload != null) {
+      _initialMunicipalityName =
+          (pendingPayload['municipality'] as String?)?.trim();
+      _typeAssessmentController.text =
+          (pendingPayload['typeAssessment'] as String? ?? '').trim();
+      final area = pendingPayload['area'] as num?;
+      _areaController.text = area?.toString() ?? '';
+      final barangay = (pendingPayload['barangay'] as String?)?.trim();
+      _selectedBarangay =
+          (barangay == null || barangay.isEmpty) ? null : barangay;
+      _selectedDate =
+          DateTime.tryParse(pendingPayload['date'] as String? ?? '') ??
+              DateTime.now();
+
+      final speciesRows =
+          (pendingPayload['speciesRows'] as List?) ?? const [];
+      _species = speciesRows
+          .map((row) {
+            final map = Map<String, dynamic>.from(row as Map);
+            return HabitatSpeciesEntry(
+              speciesName: (map['species_name'] ?? '').toString().trim(),
+              count: (map['count'] as num?)?.toInt() ?? 0,
+            );
+          })
+          .where((entry) => entry.speciesName.isNotEmpty)
+          .toList();
+
+      final coordinates =
+          (pendingPayload['coordinates'] as List?) ?? const [];
+      for (final rawCoord in coordinates) {
+        final coord = Map<String, dynamic>.from(rawCoord as Map);
+        final lat = (coord['lat'] as num?)?.toDouble();
+        final lng = (coord['lng'] as num?)?.toDouble();
+        if (lat == null || lng == null) continue;
+
+        final stablePhotoPath = coord['stablePhotoPath'] as String?;
+        _capturedCoordinates.add({
+          'lat': lat,
+          'lng': lng,
+          if (stablePhotoPath != null && stablePhotoPath.isNotEmpty)
+            'stablePhotoPath': stablePhotoPath,
+        });
+      }
+    } else if (initial != null) {
+      _initialMunicipalityName = initial.municipality.trim();
       _typeAssessmentController.text = initial.typeAssessment.trim();
       _areaController.text = initial.area?.toString() ?? '';
       _selectedBarangay =
@@ -156,10 +213,10 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
       if (!mounted) return;
       setState(() => _municipalityOptions = options);
 
-      final initial = widget.initialData;
-      if (!_didApplyInitialMunicipality && initial != null) {
+      if (!_didApplyInitialMunicipality && _initialMunicipalityName != null) {
         _didApplyInitialMunicipality = true;
-        final initialMunicipality = initial.municipality.trim().toLowerCase();
+        final initialMunicipality =
+            _initialMunicipalityName!.trim().toLowerCase();
 
         LookupOption? match;
         for (final option in options) {
@@ -581,6 +638,62 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
     return 'public/$encodedBucket/$objectPath';
   }
 
+  /// Builds the create-shape payload consumed by
+  /// `OfflineSyncService._syncHabitatAssessment` / `updatePendingItem`.
+  ///
+  /// For each coordinate: if it has a fresh `photoPath` (captured or
+  /// replaced during this session), stage it now via
+  /// [OfflineSyncService.stagePhoto]. Otherwise, keep whatever
+  /// `stablePhotoPath` it already had (e.g. reloaded from a pending draft)
+  /// unchanged, so already-staged photos aren't copied again on every save.
+  Future<Map<String, dynamic>> _buildOfflinePayload({
+    required int userId,
+    required String municipality,
+    required String barangay,
+    required String typeAssessment,
+    required double? area,
+  }) async {
+    final coordinatesPayload = <Map<String, dynamic>>[];
+    for (final coord in _capturedCoordinates) {
+      final lat = coord['lat'] as num?;
+      final lng = coord['lng'] as num?;
+      if (lat == null || lng == null) continue;
+
+      String? stablePhotoPath = coord['stablePhotoPath'] as String?;
+      final freshPhotoPath = coord['photoPath'] as String?;
+
+      if (freshPhotoPath != null && freshPhotoPath.isNotEmpty) {
+        stablePhotoPath =
+            await OfflineSyncService.stagePhoto(freshPhotoPath) ??
+                stablePhotoPath;
+      }
+
+      coordinatesPayload.add({
+        'lat': lat,
+        'lng': lng,
+        if (stablePhotoPath != null) 'stablePhotoPath': stablePhotoPath,
+      });
+    }
+
+    final speciesRows = _species
+        .map((entry) => {
+              'species_name': entry.speciesName,
+              'count': entry.count,
+            })
+        .toList();
+
+    return {
+      'userId': userId,
+      'municipality': municipality,
+      'barangay': barangay,
+      'typeAssessment': typeAssessment,
+      'date': _selectedDate.toIso8601String(),
+      'area': area,
+      'speciesRows': speciesRows,
+      'coordinates': coordinatesPayload,
+    };
+  }
+
   Future<void> _handleSave() async {
     if (_isSaving) return;
 
@@ -598,24 +711,101 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
       return;
     }
 
-    final userSeqId = AuthSession.currentUser?.seqId;
-    if (userSeqId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Unable to save data: missing user id. Try signing out and back in.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
+    final isPendingDraft = widget.pendingLocalId != null;
+    final isEditingSyncedRecord = widget.initialData?.id != null;
+
+    int? userSeqId;
+    if (!isPendingDraft) {
+      userSeqId = AuthSession.currentUser?.seqId;
+      if (userSeqId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+                'Unable to save data: missing user id. Try signing out and back in.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
     }
 
     final parsedArea = double.tryParse(_areaController.text.trim());
-    final isEditing = widget.initialData?.id != null;
 
     setState(() => _isSaving = true);
 
     try {
-      final savedAssessment = isEditing
+      // ── Editing a draft that was saved offline and hasn't synced yet ─────
+      if (isPendingDraft) {
+        final originalUserId =
+            (widget.pendingPayload?['userId'] as num?)?.toInt() ??
+                AuthSession.currentUser?.seqId ??
+                0;
+
+        final payload = await _buildOfflinePayload(
+          userId: originalUserId,
+          municipality: municipality,
+          barangay: barangay,
+          typeAssessment: typeAssessment,
+          area: parsedArea,
+        );
+
+        await OfflineSyncService.updatePendingItem(
+            widget.pendingLocalId!, payload);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave();
+        return;
+      }
+
+      // ── Offline path — new record queued for later sync ──────────────────
+      final isOnline = await OfflineSyncService.hasInternetConnection();
+      if (!mounted) return;
+
+      if (!isOnline) {
+        if (isEditingSyncedRecord) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Editing requires an internet connection.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        final payload = await _buildOfflinePayload(
+          userId: userSeqId!,
+          municipality: municipality,
+          barangay: barangay,
+          typeAssessment: typeAssessment,
+          area: parsedArea,
+        );
+
+        await OfflineSyncService.queueGenericRecord(
+          type: 'habitat_assessment',
+          payload: payload,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave();
+        return;
+      }
+
+      // ── Online path (unchanged) ───────────────────────────────────────────
+      final savedAssessment = isEditingSyncedRecord
           ? await ApiService.updateHabitatAssessment(
               id: widget.initialData!.id!,
               municipality: municipality,
@@ -625,7 +815,7 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
               area: parsedArea,
             )
           : await ApiService.saveHabitatAssessment(
-              userId: userSeqId,
+              userId: userSeqId!,
               municipality: municipality,
               barangay: barangay,
               typeAssessment: typeAssessment,
@@ -643,7 +833,7 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
                 })
             .toList();
 
-        if (isEditing) {
+        if (isEditingSyncedRecord) {
           await ApiService.replaceHabitatAssessmentDataRows(
             assessmentId: assessmentId,
             speciesRows: speciesRows,
@@ -683,6 +873,8 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
           );
         }
       }
+
+      OfflineSyncService.syncAll().ignore();
 
       if (!mounted) return;
 
@@ -1354,7 +1546,12 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
                                                     fontSize: 11,
                                                   ),
                                                 ),
-                                                if (_capturedCoordinates[i]['photoPath'] != null)
+                                                if (_capturedCoordinates[i]
+                                                            ['photoPath'] !=
+                                                        null ||
+                                                    _capturedCoordinates[i][
+                                                            'stablePhotoPath'] !=
+                                                        null)
                                                   Padding(
                                                     padding: const EdgeInsets.only(top: 4),
                                                     child: Text(

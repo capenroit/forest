@@ -144,5 +144,46 @@ class SeedlingListService {
 
     return Map<String, dynamic>.from(inserted);
   }
+
+  /// Returns raw seedling_list rows (seq_id, seedling_name, details) for a
+  /// management UI that needs to edit/remove individual entries.
+  Future<List<Map<String, dynamic>>> getSeedlingRows() async {
+    final response = await supabase
+        .from('seedling_list')
+        .select('seq_id, seedling_name, details')
+        .order('seedling_name', ascending: true);
+
+    return List<Map<String, dynamic>>.from(response as List<dynamic>);
+  }
+
+  /// Updates an existing seedling's name/details.
+  Future<Map<String, dynamic>> updateSeedlingName({
+    required int seqId,
+    required String seedlingName,
+    String? details,
+  }) async {
+    final name = seedlingName.trim();
+    final description = (details ?? '').trim();
+    if (name.isEmpty) {
+      throw Exception('Seedling name cannot be empty.');
+    }
+
+    final updated = await supabase
+        .from('seedling_list')
+        .update({
+          'seedling_name': name,
+          'details': description.isEmpty ? name : description,
+        })
+        .eq('seq_id', seqId)
+        .select('seq_id, seedling_name')
+        .single();
+
+    return Map<String, dynamic>.from(updated);
+  }
+
+  /// Removes a seedling from the shared lookup table.
+  Future<void> deleteSeedlingName(int seqId) async {
+    await supabase.from('seedling_list').delete().eq('seq_id', seqId);
+  }
 }
 

@@ -1641,6 +1641,146 @@ class ApiService {
     }
   }
 
+  /// Returns raw mangrove_list rows (id, name, details) for a management
+  /// UI that needs to edit/remove individual entries.
+  static Future<List<Map<String, dynamic>>> getMangroveSpeciesRows() async {
+    try {
+      final response = await _client
+          .from('mangrove_list')
+          .select('id, name, details')
+          .order('name', ascending: true);
+
+      return List<Map<String, dynamic>>.from(response as List<dynamic>);
+    } catch (e) {
+      throw Exception('Error fetching mangrove species: $e');
+    }
+  }
+
+  /// Updates an existing mangrove species entry's name/details.
+  static Future<Map<String, dynamic>> updateMangroveSpeciesName({
+    required int id,
+    required String name,
+    String? details,
+  }) async {
+    final trimmedName = name.trim();
+    final trimmedDetails = (details ?? '').trim();
+    if (trimmedName.isEmpty) {
+      throw Exception('Mangrove species name cannot be empty.');
+    }
+
+    try {
+      final response = await _client
+          .from('mangrove_list')
+          .update({
+            'name': trimmedName,
+            'details': trimmedDetails.isEmpty ? null : trimmedDetails,
+          })
+          .eq('id', id)
+          .select('id, name')
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error updating mangrove species: $e');
+    }
+  }
+
+  /// Removes a mangrove species entry from the shared lookup table.
+  static Future<void> deleteMangroveSpeciesName(int id) async {
+    try {
+      await _client.from('mangrove_list').delete().eq('id', id);
+    } catch (e) {
+      throw Exception('Error deleting mangrove species: $e');
+    }
+  }
+
+  // ===== SEEDLING NURSERY ENDPOINTS =====
+
+  /// Returns raw seedling_nursery rows for a management UI.
+  static Future<List<Map<String, dynamic>>> getSeedlingNurseryRows() async {
+    try {
+      final response = await _client
+          .from('seedling_nursery')
+          .select('seq_id, name, description, div_type')
+          .order('name', ascending: true);
+
+      return List<Map<String, dynamic>>.from(response as List<dynamic>);
+    } catch (e) {
+      throw Exception('Error fetching seedling nurseries: $e');
+    }
+  }
+
+  /// Adds a new nursery.
+  static Future<Map<String, dynamic>> addSeedlingNursery({
+    required String name,
+    String? description,
+    required int divType,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw Exception('Nursery name cannot be empty.');
+    }
+
+    try {
+      final response = await _client
+          .from('seedling_nursery')
+          .insert({
+            'name': trimmedName,
+            'description': (description ?? '').trim().isEmpty
+                ? null
+                : description!.trim(),
+            'div_type': divType,
+          })
+          .select('seq_id, name, description, div_type')
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error adding nursery: $e');
+    }
+  }
+
+  /// Updates an existing nursery's name/description/division.
+  static Future<Map<String, dynamic>> updateSeedlingNursery({
+    required int seqId,
+    required String name,
+    String? description,
+    required int divType,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw Exception('Nursery name cannot be empty.');
+    }
+
+    try {
+      final response = await _client
+          .from('seedling_nursery')
+          .update({
+            'name': trimmedName,
+            'description': (description ?? '').trim().isEmpty
+                ? null
+                : description!.trim(),
+            'div_type': divType,
+          })
+          .eq('seq_id', seqId)
+          .select('seq_id, name, description, div_type')
+          .single();
+
+      return response;
+    } catch (e) {
+      throw Exception('Error updating nursery: $e');
+    }
+  }
+
+  /// Removes a nursery.
+  static Future<void> deleteSeedlingNursery(int seqId) async {
+    try {
+      await _client.from('seedling_nursery').delete().eq('seq_id', seqId);
+    } catch (e) {
+      throw Exception('Error deleting nursery: $e');
+    }
+  }
+
   // ===== LOCATION ENDPOINTS (per-row CRUD) =====
   //
   // saveLocationRowsForActivity (above) does a batch insert with no

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../service/api_service.dart';
+import '../service/auth_session.dart';
 
 class SettingMangrovePage extends StatefulWidget {
   const SettingMangrovePage({super.key});
@@ -17,7 +18,7 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
   bool _isLoading = true;
   bool _isSaving = false;
   String? _errorMessage;
-  List<String> _mangroveNames = [];
+  List<Map<String, dynamic>> _mangroveRows = [];
   String _searchQuery = '';
 
   @override
@@ -33,12 +34,11 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
     });
 
     try {
-      final names = await ApiService.getMangroveSpeciesNames();
-      final sorted = [...names]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      final rows = await ApiService.getMangroveSpeciesRows();
 
       if (!mounted) return;
       setState(() {
-        _mangroveNames = sorted;
+        _mangroveRows = rows;
         _isLoading = false;
       });
     } catch (e) {
@@ -269,7 +269,8 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
       return;
     }
 
-    final exists = _mangroveNames.any((item) => item.toLowerCase() == name.toLowerCase());
+    final exists = _mangroveRows.any((row) =>
+        (row['name'] ?? '').toString().toLowerCase() == name.toLowerCase());
     if (exists) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -284,18 +285,14 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
     FocusManager.instance.primaryFocus?.unfocus();
 
     try {
-      final inserted = await ApiService.addMangroveSpeciesName(
+      await ApiService.addMangroveSpeciesName(
         name: name,
         details: details,
       ).timeout(const Duration(seconds: 12));
 
       if (!mounted) return;
       Navigator.pop(dialogContext);
-      final savedName = inserted['name']?.toString() ?? name;
-      setState(() {
-        _mangroveNames = [..._mangroveNames, savedName]
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-      });
+      await _loadMangroveNames();
     } on TimeoutException {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -319,6 +316,125 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
     }
   }
 
+  Future<void> _showEditMangroveDialog(Map<String, dynamic> row) async {
+    final id = (row['id'] as num).toInt();
+    final nameController =
+        TextEditingController(text: (row['name'] ?? '').toString());
+    final detailsController =
+        TextEditingController(text: (row['details'] ?? '').toString());
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: const Text('Edit Mangrove Species'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(labelText: 'Species Name'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: detailsController,
+                decoration: const InputDecoration(labelText: 'Details'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final name = nameController.text.trim();
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter a species name.'),
+                      backgroundColor: Colors.orange,
+                    ),
+                  );
+                  return;
+                }
+
+                try {
+                  await ApiService.updateMangroveSpeciesName(
+                    id: id,
+                    name: name,
+                    details: detailsController.text,
+                  );
+                  if (!mounted) return;
+                  Navigator.pop(dialogContext);
+                  await _loadMangroveNames();
+                } catch (e) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Failed to update species: $e'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    nameController.dispose();
+    detailsController.dispose();
+  }
+
+  Future<void> _confirmDeleteMangrove(Map<String, dynamic> row) async {
+    final id = (row['id'] as num).toInt();
+    final name = (row['name'] ?? '').toString();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Text('Remove Species?'),
+        content: Text('Are you sure you want to remove "$name"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await ApiService.deleteMangroveSpeciesName(id);
+      if (!mounted) return;
+      await _loadMangroveNames();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name removed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to remove species: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
@@ -327,8 +443,11 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
 
   @override
   Widget build(BuildContext context) {
-    final filteredMangroves = _mangroveNames
-        .where((name) => name.toLowerCase().contains(_searchQuery.toLowerCase()))
+    final filteredMangroves = _mangroveRows
+        .where((row) => (row['name'] ?? '')
+            .toString()
+            .toLowerCase()
+            .contains(_searchQuery.toLowerCase()))
         .toList();
 
     return Scaffold(
@@ -427,7 +546,7 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
                   ),
                 ),
               )
-            else if (_mangroveNames.isEmpty)
+            else if (_mangroveRows.isEmpty)
               const Card(
                 child: Padding(
                   padding: EdgeInsets.all(16),
@@ -443,10 +562,30 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
               )
             else
               ...filteredMangroves.map(
-                (name) => Card(
+                (row) => Card(
                   child: ListTile(
                     leading: const Icon(Icons.forest),
-                    title: Text(name),
+                    title: Text((row['name'] ?? '').toString()),
+                    subtitle: (row['details'] ?? '').toString().isEmpty
+                        ? null
+                        : Text((row['details']).toString()),
+                    trailing: AuthSession.isAdmin
+                        ? PopupMenuButton<String>(
+                            onSelected: (value) {
+                              if (value == 'edit') {
+                                _showEditMangroveDialog(row);
+                              } else if (value == 'remove') {
+                                _confirmDeleteMangrove(row);
+                              }
+                            },
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                  value: 'edit', child: Text('Edit')),
+                              PopupMenuItem(
+                                  value: 'remove', child: Text('Remove')),
+                            ],
+                          )
+                        : null,
                   ),
                 ),
               ),

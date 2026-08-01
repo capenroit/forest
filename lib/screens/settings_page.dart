@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../widget/side_panel.dart';
 import 'setting_mangrove_page.dart';
+import 'setting_nursery_page.dart';
 import 'setting_seedling_page.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -29,6 +30,9 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // These shared lookup lists are visible to everyone since data
+          // entry forms need them, but only admins/managers can edit or
+          // remove entries (enforced inside each page).
           Card(
             child: ListTile(
               leading: const Icon(Icons.eco),
@@ -48,12 +52,28 @@ class _SettingsPageState extends State<SettingsPage> {
             child: ListTile(
               leading: const Icon(Icons.forest),
               title: const Text('Mangrove List'),
-              subtitle: const Text('Manage mangrove species names and details'),
+              subtitle:
+                  const Text('Manage mangrove species names and details'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const SettingMangrovePage()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.park),
+              title: const Text('Nursery List'),
+              subtitle: const Text('Manage nurseries and their division'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const SettingNurseryPage()),
                 );
               },
             ),

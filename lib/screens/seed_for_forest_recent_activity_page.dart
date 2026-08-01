@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../data_entry/seed_for_forest_models.dart';
 import '../data_entry/seed_for_forest_form.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../service/seedling_list_service.dart';
 import '../widget/side_panel.dart';
 
@@ -19,12 +20,35 @@ class _SeedForForestRecentActivityPageState
     extends State<SeedForForestRecentActivityPage> {
   final SupabaseClient _supabase = Supabase.instance.client;
   final SeedlingListService _seedlingListService = SeedlingListService();
-  late Future<List<SeedForForestEntry>> _recentActivitiesFuture;
+
+  /// Synced records and queued-but-not-yet-synced ("pending sync") records,
+  /// loaded together so both refresh in lockstep on initState, pull-to-
+  /// refresh, and after returning from the form.
+  late Future<(List<SeedForForestEntry>, List<Map<String, dynamic>>)>
+      _pageDataFuture;
 
   @override
   void initState() {
     super.initState();
-    _recentActivitiesFuture = _loadRecentActivities();
+    _pageDataFuture = _loadPageData();
+  }
+
+  Future<(List<SeedForForestEntry>, List<Map<String, dynamic>>)>
+      _loadPageData() async {
+    final results = await Future.wait<Object>([
+      _loadRecentActivities(),
+      OfflineSyncService.getPendingItems(type: 'seed_for_forest'),
+    ]);
+    return (
+      results[0] as List<SeedForForestEntry>,
+      results[1] as List<Map<String, dynamic>>,
+    );
+  }
+
+  void _refresh() {
+    setState(() {
+      _pageDataFuture = _loadPageData();
+    });
   }
 
   @override
@@ -67,47 +91,85 @@ class _SeedForForestRecentActivityPageState
             ),
           ),
           Expanded(
-            child: FutureBuilder<List<SeedForForestEntry>>(
-              future: _recentActivitiesFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                if (snapshot.hasError) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(20),
-                      child: Text(
-                        'Failed to load recent activity: ${snapshot.error}',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  );
-                }
-
-                final activities = snapshot.data ?? const <SeedForForestEntry>[];
-                if (activities.isEmpty) {
-                  return const Center(
-                    child: Text('No seed donations found.'),
-                  );
-                }
-
-                return ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                  itemCount: activities.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final activity = activities[index];
-                    return _RecentActivityCard(
-                      activity: activity,
-                      onEdit: () => _editActivity(activity),
-                      onRemove: () => _removeDonation(activity),
-                      onStatusTap: () => _changeStatus(activity),
-                    );
-                  },
-                );
+            child: RefreshIndicator(
+              onRefresh: () async {
+                _refresh();
+                await _pageDataFuture;
               },
+              child:
+                  FutureBuilder<(List<SeedForForestEntry>, List<Map<String, dynamic>>)>(
+                future: _pageDataFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Text(
+                          'Failed to load recent activity: ${snapshot.error}',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    );
+                  }
+
+                  final activities =
+                      snapshot.data?.$1 ?? const <SeedForForestEntry>[];
+                  final pendingItems =
+                      snapshot.data?.$2 ?? const <Map<String, dynamic>>[];
+
+                  if (activities.isEmpty && pendingItems.isEmpty) {
+                    return const Center(
+                      child: Text('No seed donations found.'),
+                    );
+                  }
+
+                  return ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                    children: [
+                      if (pendingItems.isNotEmpty) ...[
+                        _SectionLabel(
+                          text: 'Pending Sync (${pendingItems.length})',
+                          color: const Color(0xFFB07C1F),
+                          icon: Icons.cloud_off_rounded,
+                        ),
+                        const SizedBox(height: 10),
+                        for (final item in pendingItems)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: _PendingActivityCard(
+                              item: item,
+                              onTap: () => _editPendingActivity(item),
+                              onDelete: () => _deletePendingActivity(item),
+                            ),
+                          ),
+                        if (activities.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          const _SectionLabel(
+                            text: 'Synced',
+                            color: Color(0xFF23253B),
+                            icon: Icons.cloud_done_rounded,
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                      ],
+                      for (final activity in activities)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _RecentActivityCard(
+                            activity: activity,
+                            onEdit: () => _editActivity(activity),
+                            onRemove: () => _removeDonation(activity),
+                            onStatusTap: () => _changeStatus(activity),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -138,7 +200,11 @@ class _SeedForForestRecentActivityPageState
     );
   }
 
-  Future<void> _openAddDialog({SeedForForestEntry? initialEntry}) async {
+  Future<void> _openAddDialog({
+    SeedForForestEntry? initialEntry,
+    String? pendingLocalId,
+    Map<String, dynamic>? pendingPayload,
+  }) async {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -149,21 +215,26 @@ class _SeedForForestRecentActivityPageState
         insetPadding: const EdgeInsets.all(16),
         child: SeedForForestForm(
           initialData: initialEntry,
+          pendingLocalId: pendingLocalId,
+          pendingPayload: pendingPayload,
           onSave: (entry) {
             Navigator.pop(dialogContext);
             if (!mounted) return;
-            setState(() {
-              _recentActivitiesFuture = _loadRecentActivities();
-            });
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  initialEntry == null
-                      ? 'Seed for a Forest record added.'
-                      : 'Seed for a Forest record updated.',
+            _refresh();
+            // Offline/pending saves (entry.id == null) already show their
+            // own "Data was saved." snackbar from inside the form — only
+            // show this one for a save that actually reached the server.
+            if (entry.id != null) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    initialEntry == null
+                        ? 'Seed for a Forest record added.'
+                        : 'Seed for a Forest record updated.',
+                  ),
                 ),
-              ),
-            );
+              );
+            }
           },
           onCancel: () {
             Navigator.pop(dialogContext);
@@ -177,6 +248,111 @@ class _SeedForForestRecentActivityPageState
     final initialData = await _loadEntryForEdit(activity.id);
     if (!mounted || initialData == null) return;
     await _openAddDialog(initialEntry: initialData);
+  }
+
+  Future<void> _editPendingActivity(Map<String, dynamic> item) async {
+    final localId = (item['localId'] ?? '').toString();
+    if (localId.isEmpty) return;
+    final payload = Map<String, dynamic>.from(item['payload'] as Map? ?? {});
+    await _openAddDialog(pendingLocalId: localId, pendingPayload: payload);
+  }
+
+  Future<void> _deletePendingActivity(Map<String, dynamic> item) async {
+    final localId = (item['localId'] ?? '').toString();
+    if (localId.isEmpty) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        actionsPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+        title: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: Colors.red.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.delete_outline_rounded,
+                size: 20,
+                color: Color(0xFFC62828),
+              ),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
+              child: Text(
+                'Delete Pending Record?',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF22232F),
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'This record has not synced yet. Deleting it now discards it permanently and it will not be uploaded.',
+          style: TextStyle(
+            fontSize: 14,
+            height: 1.35,
+            color: Color(0xFF5E6175),
+          ),
+        ),
+        actions: [
+          OutlinedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              side: const BorderSide(color: Color(0xFFD4D7E5)),
+            ),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: Color(0xFF4E526A),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFD32F2F),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              elevation: 0,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            icon: const Icon(Icons.delete_outline_rounded, size: 18),
+            label: const Text(
+              'Delete',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    await OfflineSyncService.deletePendingItem(localId);
+    if (!mounted) return;
+    _refresh();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Pending record removed.')),
+    );
   }
 
   Future<SeedForForestEntry?> _loadEntryForEdit(int? donationId) async {
@@ -615,9 +791,7 @@ class _SeedForForestRecentActivityPageState
           .update({'status': updatedStatus}).eq('id', activity.id!);
 
       if (!mounted) return;
-      setState(() {
-        _recentActivitiesFuture = _loadRecentActivities();
-      });
+      _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Status updated to $updatedStatus.')),
       );
@@ -724,9 +898,7 @@ class _SeedForForestRecentActivityPageState
       await _supabase.from('seed_donation').delete().eq('id', activity.id!);
 
       if (!mounted) return;
-      setState(() {
-        _recentActivitiesFuture = _loadRecentActivities();
-      });
+      _refresh();
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Seed donation removed.')),
       );
@@ -771,6 +943,173 @@ class _SeedForForestRecentActivityPageState
           );
         })
         .toList();
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({
+    required this.text,
+    required this.color,
+    required this.icon,
+  });
+
+  final String text;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 6),
+        Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.5,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Lightweight card for a record queued via OfflineSyncService that has not
+/// synced to the server yet. Reads straight from the queue item's payload
+/// map rather than a model class — donor name / date / total count come
+/// from payload['headerPayload'], falling back to summing
+/// payload['seedDetails'] for the count if total_count wasn't stored.
+class _PendingActivityCard extends StatelessWidget {
+  const _PendingActivityCard({
+    required this.item,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  final Map<String, dynamic> item;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final payload = Map<String, dynamic>.from(item['payload'] as Map? ?? {});
+    final header =
+        Map<String, dynamic>.from(payload['headerPayload'] as Map? ?? {});
+    final seedDetails = (payload['seedDetails'] as List? ?? const [])
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
+
+    final donorName = (header['donor_name'] ?? '').toString();
+    final donatedDate =
+        DateTime.tryParse((header['donated_date'] ?? '').toString());
+    final totalCount = (header['total_count'] as num?)?.toInt() ??
+        seedDetails.fold<int>(
+          0,
+          (sum, row) => sum + ((row['seed_count'] as num?)?.toInt() ?? 0),
+        );
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF6EA),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFF0C88A)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFB07C1F).withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.cloud_off_rounded,
+                              size: 12, color: Color(0xFFB07C1F)),
+                          SizedBox(width: 4),
+                          Text(
+                            'PENDING SYNC',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.4,
+                              color: Color(0xFFB07C1F),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton(
+                      onPressed: onDelete,
+                      icon: const Icon(Icons.delete_outline,
+                          color: Color(0xFFB07C1F)),
+                      tooltip: 'Delete pending record',
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: _RowColumn(
+                        label: 'Donor Name',
+                        value: donorName.isEmpty ? 'Unspecified' : donorName,
+                        valueMaxLines: 2,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: _RowColumn(
+                        label: 'Date',
+                        value: donatedDate != null
+                            ? _formatDate(donatedDate)
+                            : '-',
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: _RowColumn(
+                        label: 'Total Seed Donated',
+                        value: totalCount.toString(),
+                        valueColor: const Color(0xFFB07C1F),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatDate(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
   }
 }
 

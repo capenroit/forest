@@ -1,11 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -149,26 +147,6 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
     return AuthSession.currentUser?.divisionTypeId ?? 0;
   }
 
-  Future<bool> _hasInternetConnection() async {
-    if (kIsWeb) {
-      // The offline-queue path below (OfflineSyncService) uses path_provider
-      // to write to a local file, which has no implementation on web and
-      // throws MissingPluginException. Web has no meaningful offline mode
-      // here, so always treat it as online — same convention already used
-      // by SidePanel's connectivity check and the login screen.
-      return true;
-    }
-
-    try {
-      final response = await http
-          .get(Uri.parse('https://clients3.google.com/generate_204'))
-          .timeout(const Duration(seconds: 5));
-      return response.statusCode == 204 || response.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
-  }
-
   Future<String> _uploadTreeGrowingPhotoToSupabase({
     required String localPath,
     required String photoName,
@@ -274,7 +252,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
       final numberOfTrees = _totalSeedlings;
 
       // ── Offline path ────────────────────────────────────────────────────
-      final isOnline = await _hasInternetConnection();
+      final isOnline = await OfflineSyncService.hasInternetConnection();
       if (!mounted) return;
       if (!isOnline) {
         final offlinePlanting = TreePlanting(

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data_entry/flora_fauna_form.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/activity_photos_dialog.dart';
 import '../widget/side_panel.dart';
 
@@ -17,13 +18,34 @@ class CapizFloraFaunaRecentActivityPage extends StatefulWidget {
 class _CapizFloraFaunaRecentActivityPageState
     extends State<CapizFloraFaunaRecentActivityPage> {
   final List<FloraFaunaEntry> _recentActivities = [];
+  List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
-    _loadRecentActivities();
+    _loadAll();
+  }
+
+  Future<void> _loadAll({bool showLoader = true}) async {
+    await Future.wait([
+      _loadRecentActivities(showLoader: showLoader),
+      _loadPendingItems(),
+    ]);
+  }
+
+  Future<void> _loadPendingItems() async {
+    try {
+      final items =
+          await OfflineSyncService.getPendingItems(type: 'flora_fauna');
+      if (!mounted) return;
+      setState(() {
+        _pendingItems = items;
+      });
+    } catch (_) {
+      // Best effort — the pending list just stays as it was.
+    }
   }
 
   Future<void> _loadRecentActivities({bool showLoader = true}) async {
@@ -189,7 +211,7 @@ class _CapizFloraFaunaRecentActivityPageState
           onSave: (entry) {
             Navigator.pop(dialogContext);
             if (!mounted) return;
-            _loadRecentActivities(showLoader: false);
+            _loadAll(showLoader: false);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(index == null
@@ -202,6 +224,75 @@ class _CapizFloraFaunaRecentActivityPageState
             Navigator.pop(dialogContext);
           },
         ),
+      ),
+    );
+  }
+
+  Future<void> _openPendingDialog(Map<String, dynamic> item) async {
+    final localId = item['localId'] as String;
+    final payload = Map<String, dynamic>.from(item['payload'] as Map? ?? {});
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: FloraFaunaForm(
+          pendingLocalId: localId,
+          pendingPayload: payload,
+          onSave: (entry) {
+            Navigator.pop(dialogContext);
+            if (!mounted) return;
+            _loadAll(showLoader: false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Survey entry updated.')),
+            );
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deletePendingEntry(String localId) async {
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Delete Pending Entry?'),
+            content: const Text(
+              'This record has not been synced yet. It will be removed '
+              'from the offline queue.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Delete',
+                    style: TextStyle(color: Colors.red)),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) return;
+
+    await OfflineSyncService.deletePendingItem(localId);
+    if (!mounted) return;
+    await _loadPendingItems();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Pending entry removed.'),
+        backgroundColor: Colors.green,
       ),
     );
   }
@@ -331,6 +422,34 @@ class _CapizFloraFaunaRecentActivityPageState
     );
   }
 
+  Widget _buildPendingSectionHeader() {
+    return Row(
+      children: [
+        const Icon(Icons.cloud_off_rounded, size: 16, color: Color(0xFFB25E00)),
+        const SizedBox(width: 6),
+        Text(
+          'Pending sync (${_pendingItems.length})',
+          style: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: Color(0xFFB25E00),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSyncedSectionHeader() {
+    return const Text(
+      'Synced',
+      style: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFF636780),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -387,7 +506,7 @@ class _CapizFloraFaunaRecentActivityPageState
                               ),
                               const SizedBox(height: 10),
                               ElevatedButton(
-                                onPressed: _loadRecentActivities,
+                                onPressed: _loadAll,
                                 child: const Text('Retry'),
                               ),
                             ],
@@ -395,8 +514,9 @@ class _CapizFloraFaunaRecentActivityPageState
                         ),
                       )
                     : RefreshIndicator(
-                        onRefresh: () => _loadRecentActivities(showLoader: false),
-                        child: _recentActivities.isEmpty
+                        onRefresh: () => _loadAll(showLoader: false),
+                        child: (_recentActivities.isEmpty &&
+                                _pendingItems.isEmpty)
                             ? ListView(
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 padding: const EdgeInsets.all(20),
@@ -413,20 +533,47 @@ class _CapizFloraFaunaRecentActivityPageState
                                   ),
                                 ],
                               )
-                            : ListView.separated(
+                            : ListView(
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                                itemCount: _recentActivities.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                                itemBuilder: (context, index) {
-                                  final activity = _recentActivities[index];
-                                  return _RecentActivityCard(
-                                    activity: activity,
-                                    onPhotos: () => _viewPhotos(activity),
-                                    onEdit: () => _editActivity(activity, index),
-                                    onRemove: () => _confirmRemove(index),
-                                  );
-                                },
+                                children: [
+                                  if (_pendingItems.isNotEmpty) ...[
+                                    _buildPendingSectionHeader(),
+                                    const SizedBox(height: 10),
+                                    for (final item in _pendingItems)
+                                      Padding(
+                                        padding:
+                                            const EdgeInsets.only(bottom: 12),
+                                        child: _PendingActivityCard(
+                                          item: item,
+                                          onTap: () =>
+                                              _openPendingDialog(item),
+                                          onDelete: () => _deletePendingEntry(
+                                              item['localId'] as String),
+                                        ),
+                                      ),
+                                    if (_recentActivities.isNotEmpty) ...[
+                                      const SizedBox(height: 4),
+                                      _buildSyncedSectionHeader(),
+                                      const SizedBox(height: 10),
+                                    ],
+                                  ],
+                                  for (var index = 0;
+                                      index < _recentActivities.length;
+                                      index++)
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12),
+                                      child: _RecentActivityCard(
+                                        activity: _recentActivities[index],
+                                        onPhotos: () => _viewPhotos(
+                                            _recentActivities[index]),
+                                        onEdit: () => _editActivity(
+                                            _recentActivities[index], index),
+                                        onRemove: () => _confirmRemove(index),
+                                      ),
+                                    ),
+                                ],
                               ),
                       ),
           ),
@@ -456,6 +603,115 @@ class _CapizFloraFaunaRecentActivityPageState
         ),
       ),
     );
+  }
+}
+
+class _PendingActivityCard extends StatelessWidget {
+  const _PendingActivityCard({
+    required this.item,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  final Map<String, dynamic> item;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final payload = Map<String, dynamic>.from(item['payload'] as Map? ?? {});
+    final survey = Map<String, dynamic>.from(payload['survey'] as Map? ?? {});
+    final activityName = (survey['activityName'] as String?)?.trim();
+    final municipality = (survey['municipality'] as String?)?.trim() ?? '';
+    final barangay = (survey['barangay'] as String?)?.trim() ?? '';
+    final surveyDate =
+        DateTime.tryParse((survey['surveyDate'] as String?) ?? '');
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF6E5),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: const Color(0xFFFFCC80)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    (activityName != null && activityName.isNotEmpty)
+                        ? activityName
+                        : 'Survey Record',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF7A4F01),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: const Text(
+                    'Pending sync',
+                    style: TextStyle(
+                      color: Color(0xFFB25E00),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Delete',
+                  icon: const Icon(Icons.delete_outline,
+                      color: Colors.red, size: 20),
+                  onPressed: onDelete,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                _LabelValue(
+                  label: 'Municipality',
+                  value: municipality.isEmpty ? '—' : municipality,
+                ),
+                _LabelValue(
+                  label: 'Barangay',
+                  value: barangay.isEmpty ? '—' : barangay,
+                ),
+                _LabelValue(
+                  label: 'Survey Date',
+                  value: surveyDate != null ? _formatDate(surveyDate) : '—',
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatDate(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
   }
 }
 

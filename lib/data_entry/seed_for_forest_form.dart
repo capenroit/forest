@@ -5,6 +5,7 @@ import 'seed_for_forest_models.dart';
 import '../widget/add_seed_list_dialog.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
+import '../service/offline_sync_service.dart';
 import '../service/seedling_list_service.dart';
 
 class SeedForForestForm extends StatefulWidget {
@@ -18,11 +19,25 @@ class SeedForForestForm extends StatefulWidget {
     this.formTitle = 'Seed for a Forest Data Entry',
     this.formSubtitle = 'Record donor and seed list details',
     this.useMangroveSpeciesList = false,
+    this.pendingLocalId,
+    this.pendingPayload,
   });
 
   final ValueChanged<SeedForForestEntry> onSave;
   final VoidCallback onCancel;
   final SeedForForestEntry? initialData;
+
+  /// When set, this form is editing a record that was saved offline and is
+  /// still sitting in the local sync queue (not yet on the server). [_save]
+  /// rewrites the queued payload in place instead of talking to Supabase,
+  /// and [initState] populates fields from [pendingPayload] instead of
+  /// [initialData].
+  final String? pendingLocalId;
+
+  /// The queued payload for [pendingLocalId], in the exact shape
+  /// OfflineSyncService stores/expects for type 'seed_for_forest':
+  /// `{'headerPayload': {...}, 'seedDetails': [...]}`.
+  final Map<String, dynamic>? pendingPayload;
 
   /// Label for the donor/propagator name field — lets callers repurpose this
   /// form (e.g. "Propagated By" for a direct propagation quick-add) without
@@ -62,23 +77,134 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
   LookupOption? _selectedNursery;
   bool _isLoadingNurseries = false;
 
+  /// nursery_id read from a pending draft's header payload, applied to
+  /// _selectedNursery once _nurseryOptions finishes loading.
+  int? _pendingNurseryId;
+
   @override
   void initState() {
     super.initState();
     final initial = widget.initialData;
+    final pending = widget.pendingPayload;
 
-    _donorNameController = TextEditingController(
-      text: initial?.donorName ?? '',
-    );
-    _remarksController = TextEditingController(text: initial?.remarks ?? '');
-    if (initial != null) {
-      _seedDetails.addAll(initial.seedDetails);
+    if (widget.pendingLocalId != null && pending != null) {
+      final header =
+          Map<String, dynamic>.from(pending['headerPayload'] as Map? ?? {});
+      final seedDetailRows = (pending['seedDetails'] as List? ?? [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+
+      _donorNameController = TextEditingController(
+        text: (header['donor_name'] ?? '').toString(),
+      );
+      _remarksController = TextEditingController(
+        text: (header['details'] ?? '').toString(),
+      );
+      _date = DateTime.tryParse((header['donated_date'] ?? '').toString()) ??
+          DateTime.now();
+
+      _seedDetails.addAll(seedDetailRows.map((row) {
+        final seedId = (row['seed_id'] as num?)?.toInt() ?? 0;
+        return SeedDetail(
+          seedId: seedId,
+          speciesType: (row['species_type'] ?? '').toString(),
+          // Resolved asynchronously below once the seed/mangrove lookup
+          // tables have been queried — the queued payload only stores the
+          // id, not the display name.
+          speciesName: 'Seed $seedId',
+          speciesCount: (row['seed_count'] as num?)?.toInt() ?? 0,
+        );
+      }));
+
+      if (widget.showNurseryField) {
+        _pendingNurseryId = (header['nursery_id'] as num?)?.toInt();
+      }
+
+      _resolvePendingSeedNames(seedDetailRows);
+    } else {
+      _donorNameController = TextEditingController(
+        text: initial?.donorName ?? '',
+      );
+      _remarksController = TextEditingController(text: initial?.remarks ?? '');
+      if (initial != null) {
+        _seedDetails.addAll(initial.seedDetails);
+      }
+      _date = initial?.date ?? DateTime.now();
     }
-    _date = initial?.date ?? DateTime.now();
 
     if (widget.showNurseryField) {
       _loadNurseryOptions();
     }
+  }
+
+  /// Resolves the display names for seed details restored from a pending
+  /// (not-yet-synced) draft. Mirrors the lookup logic
+  /// SeedForForestRecentActivityPage uses for synced records: seed_id
+  /// points into seedling_list normally, or into mangrove_list for rows
+  /// flagged is_mangrove.
+  Future<void> _resolvePendingSeedNames(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final regularSeedIds = <int>{};
+    final mangroveSeedIds = <int>{};
+    for (final row in rows) {
+      final seedId = (row['seed_id'] as num?)?.toInt();
+      if (seedId == null) continue;
+      if (row['is_mangrove'] == true) {
+        mangroveSeedIds.add(seedId);
+      } else {
+        regularSeedIds.add(seedId);
+      }
+    }
+
+    final Map<int, String> nameById = {};
+    try {
+      if (regularSeedIds.isNotEmpty) {
+        final options = await _seedlingListService.getSeedlingOptions();
+        for (final option in options) {
+          nameById[option.id] = option.name;
+        }
+      }
+    } catch (_) {
+      // Keep the placeholder names if the lookup fails.
+    }
+
+    final Map<int, String> mangroveNameById = {};
+    try {
+      if (mangroveSeedIds.isNotEmpty) {
+        final mangroveRows = await _supabase
+            .from('mangrove_list')
+            .select('id, name')
+            .inFilter('id', mangroveSeedIds.toList());
+        for (final row in (mangroveRows as List<dynamic>)
+            .cast<Map<String, dynamic>>()) {
+          final id = (row['id'] as num?)?.toInt();
+          final name = (row['name'] ?? '').toString();
+          if (id != null) mangroveNameById[id] = name;
+        }
+      }
+    } catch (_) {
+      // Keep the placeholder names if the lookup fails.
+    }
+
+    if (!mounted) return;
+    setState(() {
+      for (var i = 0; i < _seedDetails.length && i < rows.length; i++) {
+        final row = rows[i];
+        final seedId = (row['seed_id'] as num?)?.toInt() ?? _seedDetails[i].seedId;
+        final isMangrove = row['is_mangrove'] == true;
+        final resolvedName =
+            isMangrove ? mangroveNameById[seedId] : nameById[seedId];
+        if (resolvedName != null && resolvedName.isNotEmpty) {
+          _seedDetails[i] = SeedDetail(
+            seedId: seedId,
+            speciesType: _seedDetails[i].speciesType,
+            speciesName: resolvedName,
+            speciesCount: _seedDetails[i].speciesCount,
+          );
+        }
+      }
+    });
   }
 
   Future<void> _loadNurseryOptions() async {
@@ -100,7 +226,17 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
       if (!mounted) return;
-      setState(() => _nurseryOptions = options);
+      setState(() {
+        _nurseryOptions = options;
+        if (_pendingNurseryId != null) {
+          for (final option in options) {
+            if (option.id == _pendingNurseryId) {
+              _selectedNursery = option;
+              break;
+            }
+          }
+        }
+      });
     } catch (_) {
       // Dropdown just stays empty; save-time validation catches it.
     } finally {
@@ -599,7 +735,105 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
         },
       };
 
+      // Same shape _supabase.from('seed_donation_data') rows have always
+      // been built with, minus seed_donation_id — that's only known once
+      // the header row exists (added below for the online path, added by
+      // OfflineSyncService._syncSeedForForest once it syncs for the
+      // offline/pending paths).
+      final seedDetailRows = _seedDetails.map((detail) {
+        return {
+          'seed_id': detail.seedId,
+          'seed_count': detail.speciesCount,
+          'species_type': detail.speciesType,
+          // seed_id here points into mangrove_list, not seedling_list, when
+          // this form was opened in mangrove mode — flag it so downstream
+          // readers know which lookup table to resolve the name against.
+          'is_mangrove': widget.useMangroveSpeciesList,
+        };
+      }).toList();
+
+      // ── Editing a pending (not-yet-synced) draft ────────────────────────
+      // Purely local: rewrite the queued payload in place, no connectivity
+      // check and no Supabase calls.
+      if (widget.pendingLocalId != null) {
+        await OfflineSyncService.updatePendingItem(
+          widget.pendingLocalId!,
+          {
+            'headerPayload': headerPayload,
+            'seedDetails': seedDetailRows,
+          },
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave(
+          SeedForForestEntry(
+            id: widget.initialData?.id,
+            donorName: _donorNameController.text.trim(),
+            seedDetails: List<SeedDetail>.unmodifiable(_seedDetails),
+            date: _date,
+            totalCount: totalCount,
+            remarks: _remarksController.text.trim(),
+          ),
+        );
+        return;
+      }
+
       final initial = widget.initialData;
+
+      // ── Offline path ─────────────────────────────────────────────────────
+      final isOnline = await OfflineSyncService.hasInternetConnection();
+      if (!mounted) return;
+
+      if (!isOnline) {
+        if (initial?.id != null) {
+          // Editing an already-synced record offline is out of scope —
+          // there is nothing queued locally to rewrite, and attempting the
+          // online update/delete calls below would just hang/fail against
+          // a dead connection.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Editing requires an internet connection.'),
+            ),
+          );
+          return;
+        }
+
+        await OfflineSyncService.queueGenericRecord(
+          type: 'seed_for_forest',
+          payload: {
+            'headerPayload': headerPayload,
+            'seedDetails': seedDetailRows,
+          },
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave(
+          SeedForForestEntry(
+            donorName: _donorNameController.text.trim(),
+            seedDetails: List<SeedDetail>.unmodifiable(_seedDetails),
+            date: _date,
+            totalCount: totalCount,
+            remarks: _remarksController.text.trim(),
+          ),
+        );
+        return;
+      }
+      // ── End offline path ────────────────────────────────────────────────
+
       int seedDonationId;
 
       if (initial?.id == null) {
@@ -621,18 +855,12 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
             .eq('seed_donation_id', seedDonationId);
       }
 
-      final dataRows = _seedDetails.map((detail) {
-        return {
-          'seed_id': detail.seedId,
-          'seed_count': detail.speciesCount,
-          'seed_donation_id': seedDonationId,
-          'species_type': detail.speciesType,
-          // seed_id here points into mangrove_list, not seedling_list, when
-          // this form was opened in mangrove mode — flag it so downstream
-          // readers know which lookup table to resolve the name against.
-          'is_mangrove': widget.useMangroveSpeciesList,
-        };
-      }).toList();
+      final dataRows = seedDetailRows
+          .map((row) => {
+                ...row,
+                'seed_donation_id': seedDonationId,
+              })
+          .toList();
 
       await _supabase.from('seed_donation_data').insert(dataRows);
 
@@ -648,6 +876,10 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
           remarks: _remarksController.text.trim(),
         ),
       );
+
+      // Flush any other pending offline records now that we know we're
+      // online and this save has already completed.
+      OfflineSyncService.syncAll().ignore();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

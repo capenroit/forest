@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../service/auth_session.dart';
+import '../widget/side_panel.dart';
 
 class ManageMembersPage extends StatefulWidget {
   const ManageMembersPage({super.key});
@@ -48,17 +49,20 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
 
     try {
       final rows = await Supabase.instance.client
-          .from('users')
+          .from('users_with_confirmation')
           .select(
-              'id, seq_id, name, email, status, access_level, division_type_id, created_at')
+              'id, seq_id, name, email, status, access_level, division_type_id, created_at, email_confirmed')
           .order('created_at', ascending: false);
 
       // access_level 1 (top-level admin) accounts aren't manageable from
-      // here, and division_type_id 3 (SWM) belongs to a separate app this
-      // one doesn't handle sign-in for — neither should show up in this list.
+      // here, division_type_id 3 (SWM) belongs to a separate app this one
+      // doesn't handle sign-in for, and accounts that haven't confirmed
+      // their email yet aren't real members yet — none of these should
+      // show up in this list.
       final filtered = List<Map<String, dynamic>>.from(rows as List)
           .where((row) => (row['access_level'] as num?)?.toInt() != 1)
           .where((row) => (row['division_type_id'] as num?)?.toInt() != 3)
+          .where((row) => row['email_confirmed'] == true)
           .toList();
 
       if (!mounted) return;
@@ -129,10 +133,17 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF4F5F7),
+      drawer: const SidePanel(),
       appBar: AppBar(
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
+        leading: Builder(
+          builder: (context) => IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => Scaffold.of(context).openDrawer(),
+          ),
+        ),
         title: const Row(
           children: [
             Icon(Icons.manage_accounts_rounded, color: Colors.white, size: 26),

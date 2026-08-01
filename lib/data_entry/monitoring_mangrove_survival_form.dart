@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 
 class MonitoringMangroveSurvivalForm extends StatefulWidget {
   final List<String> municipalities;
@@ -18,6 +19,14 @@ class MonitoringMangroveSurvivalForm extends StatefulWidget {
   /// the record being edited. Null/empty means "create a new record".
   final List<Map<String, dynamic>>? initialRows;
 
+  /// When set (together with [pendingPayload]), this form edits a still-
+  /// queued offline draft instead of a server record or a brand-new entry.
+  final String? pendingLocalId;
+
+  /// The offline queue payload for the draft being edited (see
+  /// [pendingLocalId]). Shape matches what `_handleSave` queues below.
+  final Map<String, dynamic>? pendingPayload;
+
   const MonitoringMangroveSurvivalForm({
     super.key,
     required this.municipalities,
@@ -25,6 +34,8 @@ class MonitoringMangroveSurvivalForm extends StatefulWidget {
     required this.onSave,
     required this.onCancel,
     this.initialRows,
+    this.pendingLocalId,
+    this.pendingPayload,
   });
 
   @override
@@ -59,33 +70,73 @@ class _MonitoringMangroveSurvivalFormState
   bool _isLoading = false;
   bool _isSaving = false;
   bool _isLoadingSeedRows = false;
+  bool _speciesLoadFailed = false;
 
   bool get _isEditing =>
       widget.initialRows != null && widget.initialRows!.isNotEmpty;
 
+  /// True when this form is editing an offline draft that has not yet
+  /// synced to the server (see
+  /// [MonitoringMangroveSurvivalForm.pendingLocalId]).
+  bool get _isEditingPending => widget.pendingLocalId != null;
+
   @override
   void initState() {
     super.initState();
-    final editingRows = widget.initialRows;
-    _detailsController = TextEditingController(
-      text: _isEditing ? (editingRows!.first['details'] ?? '').toString() : '',
-    );
-    _dateController = TextEditingController(
-      text: _isEditing
-          ? (editingRows!.first['date']?.toString() ??
-              DateTime.now().toIso8601String().split('T').first)
-          : DateTime.now().toIso8601String().split('T').first,
-    );
-    _selectedQuarter =
-        _isEditing ? (editingRows!.first['quarter'] as num?)?.toInt() : null;
 
-    if (_isEditing) {
-      _activitySeqId = (editingRows!.first['activity_id'] as num?)?.toInt();
-      _activityName = (editingRows.first['activity_name'] ?? '').toString();
-      _municipality = (editingRows.first['municipality'] ?? '').toString();
-      _barangay = (editingRows.first['barangay'] ?? '').toString();
-      if (_activitySeqId != null) {
-        _loadSeedRowsForSelectedActivity(_activitySeqId!);
+    if (_isEditingPending) {
+      final payload = widget.pendingPayload ?? const <String, dynamic>{};
+      final parsedDate =
+          DateTime.tryParse(payload['date']?.toString() ?? '');
+
+      _detailsController =
+          TextEditingController(text: (payload['details'] ?? '').toString());
+      _dateController = TextEditingController(
+        text: (parsedDate ?? DateTime.now()).toIso8601String().split('T').first,
+      );
+      _selectedQuarter = (payload['quarter'] as num?)?.toInt();
+      _activitySeqId = (payload['activityId'] as num?)?.toInt();
+
+      final speciesSurvival =
+          (payload['speciesSurvival'] as List?) ?? const [];
+      _survivalRows = speciesSurvival
+          .map((raw) {
+            final row = Map<String, dynamic>.from(raw as Map);
+            final seedId = (row['seedId'] as num?)?.toInt();
+            if (seedId == null) return null;
+            return _SurvivalSeedRow(
+              seedId: seedId,
+              species: (row['seedName'] ?? '').toString(),
+              plantedCount: (row['plantedCount'] as num?)?.toInt() ?? 0,
+              surviveController: TextEditingController(
+                text: (row['numberTreeSurvived'] ?? '').toString(),
+              ),
+            );
+          })
+          .whereType<_SurvivalSeedRow>()
+          .toList();
+    } else {
+      final editingRows = widget.initialRows;
+      _detailsController = TextEditingController(
+        text: _isEditing ? (editingRows!.first['details'] ?? '').toString() : '',
+      );
+      _dateController = TextEditingController(
+        text: _isEditing
+            ? (editingRows!.first['date']?.toString() ??
+                DateTime.now().toIso8601String().split('T').first)
+            : DateTime.now().toIso8601String().split('T').first,
+      );
+      _selectedQuarter =
+          _isEditing ? (editingRows!.first['quarter'] as num?)?.toInt() : null;
+
+      if (_isEditing) {
+        _activitySeqId = (editingRows!.first['activity_id'] as num?)?.toInt();
+        _activityName = (editingRows.first['activity_name'] ?? '').toString();
+        _municipality = (editingRows.first['municipality'] ?? '').toString();
+        _barangay = (editingRows.first['barangay'] ?? '').toString();
+        if (_activitySeqId != null) {
+          _loadSeedRowsForSelectedActivity(_activitySeqId!);
+        }
       }
     }
 
@@ -105,23 +156,49 @@ class _MonitoringMangroveSurvivalFormState
   Future<void> _loadMangrovePlantingOptions() async {
     setState(() => _isLoading = true);
     try {
-      final options = await ApiService.getTreePlantingsByProjectTypeId(
-        _mangrovePlantingProjectTypeId,
-        limit: 500,
-      );
+      List<TreePlanting> options;
+      try {
+        options = await ApiService.getTreePlantingsByProjectTypeId(
+          _mangrovePlantingProjectTypeId,
+          limit: 500,
+        );
+        // Write-through cache so the picker still has activities to offer
+        // next time this device is offline.
+        await OfflineSyncService.cacheActivities(
+            _mangrovePlantingProjectTypeId, options);
+      } catch (_) {
+        // Offline or the request otherwise failed — fall back to the last
+        // successfully synced activity list.
+        options = await OfflineSyncService.getCachedActivities(
+            _mangrovePlantingProjectTypeId);
+      }
+
       if (!mounted) return;
       setState(() {
         _mangrovePlantingOptions = options;
       });
 
-      if (_isEditing && _activitySeqId != null) {
+      if ((_isEditing || _isEditingPending) && _activitySeqId != null) {
         // Only used to enrich the (locked) display — species/date/quarter
         // were already loaded from the edited record in initState.
+        TreePlanting? matched;
         for (final option in options) {
           if (option.seqId == _activitySeqId) {
-            setState(() => _selectedMangrovePlanting = option);
+            matched = option;
             break;
           }
+        }
+        if (matched != null) {
+          setState(() {
+            _selectedMangrovePlanting = matched;
+            if (_isEditingPending) {
+              _activityName = matched!.activityName?.trim() ?? '';
+              _municipality = matched.municipality.trim();
+              _barangay = matched.barangay.trim();
+            }
+          });
+        } else if (_isEditingPending && _activityName.isEmpty) {
+          setState(() => _activityName = 'Activity #$_activitySeqId');
         }
       }
     } finally {
@@ -154,11 +231,15 @@ class _MonitoringMangroveSurvivalFormState
         }
         _survivalRows = [];
         _usedQuarters = {};
+        _speciesLoadFailed = false;
       });
       return;
     }
 
-    setState(() => _isLoadingSeedRows = true);
+    setState(() {
+      _isLoadingSeedRows = true;
+      _speciesLoadFailed = false;
+    });
 
     // Existing per-species survived counts, keyed by seed_id, when editing.
     final existingSurvivedBySeedId = <int, int>{};
@@ -223,6 +304,20 @@ class _MonitoringMangroveSurvivalFormState
         }
         _survivalRows = nextRows;
         _usedQuarters = usedQuarters;
+      });
+    } catch (_) {
+      // No live connection (or the request otherwise failed). Species rows
+      // for an offline-selected activity are only available if this device
+      // has loaded them before — since they weren't, surface a clear inline
+      // message instead of crashing.
+      if (!mounted) return;
+      setState(() {
+        for (final row in _survivalRows) {
+          row.surviveController.dispose();
+        }
+        _survivalRows = [];
+        _usedQuarters = {};
+        _speciesLoadFailed = true;
       });
     } finally {
       if (mounted) {
@@ -323,7 +418,75 @@ class _MonitoringMangroveSurvivalFormState
 
     setState(() => _isSaving = true);
 
+    final offlinePayload = {
+      'userId': authUserId,
+      'userSeqId': AuthSession.currentUser?.seqId,
+      'activityId': activitySeqId,
+      'quarter': quarter,
+      'details': details.isEmpty ? null : details,
+      'date': parsedDate.toIso8601String(),
+      'speciesSurvival': speciesSurvival
+          .map((s) => {
+                'seedId': s.seedId,
+                'numberTreeSurvived': s.numberTreeSurvived,
+                'seedName': s.seedName,
+                'plantedCount': s.plantedCount,
+              })
+          .toList(),
+    };
+
     try {
+      if (_isEditingPending) {
+        // Still-queued offline draft — just rewrite the local payload, no
+        // connectivity or ApiService calls involved.
+        await OfflineSyncService.updatePendingItem(
+            widget.pendingLocalId!, offlinePayload);
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave();
+        return;
+      }
+
+      final isOnline = await OfflineSyncService.hasInternetConnection();
+      if (!mounted) return;
+
+      if (!isOnline) {
+        if (_isEditing) {
+          // Editing an already-synced record requires re-fetching/replacing
+          // server rows, which needs connectivity.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Editing requires an internet connection.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        await OfflineSyncService.queueGenericRecord(
+          type: 'tree_survival_monitoring',
+          payload: offlinePayload,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave();
+        return;
+      }
+
       // Neither call below has a built-in timeout — without this guard a
       // dropped/slow connection mid-save leaves the (non-dismissible)
       // dialog spinning forever, which looks like the app "freezing".
@@ -364,6 +527,10 @@ class _MonitoringMangroveSurvivalFormState
       );
 
       widget.onSave();
+
+      // Flush any other pending offline records now that we know we're
+      // online and this save has already completed.
+      OfflineSyncService.syncAll().ignore();
     } catch (e, st) {
       debugPrint('SAVE FAILED: $e\n$st');
       if (!mounted) return;
@@ -483,6 +650,13 @@ class _MonitoringMangroveSurvivalFormState
       );
     }
 
+    if (_speciesLoadFailed) {
+      return Text(
+        'Species list unavailable offline for this activity.',
+        style: TextStyle(color: Colors.orange.shade800, fontSize: 12),
+      );
+    }
+
     if (_survivalRows.isEmpty) {
       return Text(
         'No species found for this activity.',
@@ -581,7 +755,9 @@ class _MonitoringMangroveSurvivalFormState
                     Text(
                       _isEditing
                           ? 'Edit monitoring record'
-                          : 'Add monitoring record',
+                          : _isEditingPending
+                              ? 'Edit pending (offline) record'
+                              : 'Add monitoring record',
                       style:
                           const TextStyle(fontSize: 11, color: Colors.white70),
                     ),
@@ -598,8 +774,16 @@ class _MonitoringMangroveSurvivalFormState
                 children: [
                   _fieldLabel('Activity Name *'),
                   const SizedBox(height: 6),
-                  if (_isEditing)
+                  if (_isEditing || _isEditingPending)
                     TextFormField(
+                      // Rekeyed on the displayed text so that when the
+                      // pending-draft activity name resolves asynchronously
+                      // (from the cached activity list), Flutter recreates
+                      // this field's internal state and picks up the new
+                      // initialValue instead of showing a stale placeholder.
+                      key: ValueKey(
+                        'activity-$_activityName|$_municipality|$_barangay',
+                      ),
                       readOnly: true,
                       enabled: false,
                       initialValue: _activityName.isEmpty
@@ -835,7 +1019,9 @@ class _MonitoringMangroveSurvivalFormState
                               const Icon(Icons.save_rounded, size: 20),
                               const SizedBox(width: 8),
                               Text(
-                                _isEditing ? 'Update Record' : 'Save Record',
+                                (_isEditing || _isEditingPending)
+                                    ? 'Update Record'
+                                    : 'Save Record',
                                 style: const TextStyle(
                                   fontWeight: FontWeight.w600,
                                   fontSize: 15,

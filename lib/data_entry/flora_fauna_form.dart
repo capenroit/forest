@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../service/lookup_service.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/add_flora_fauna_dialog.dart';
 import '../widget/edit_coordinate_dialog.dart';
 import '../widget/polygon_calculator.dart';
@@ -65,11 +66,22 @@ class FloraFaunaForm extends StatefulWidget {
   final VoidCallback onCancel;
   final FloraFaunaEntry? initialData;
 
+  /// When non-null, this form is editing a record still sitting in the
+  /// offline queue (not yet synced to the server). Saving in this mode
+  /// rewrites the queued item in place instead of talking to Supabase.
+  final String? pendingLocalId;
+
+  /// The queued payload (`{'survey': ..., 'species': ..., 'coordinates':
+  /// ...}`) to seed the form fields from when [pendingLocalId] is set.
+  final Map<String, dynamic>? pendingPayload;
+
   const FloraFaunaForm({
     super.key,
     required this.onSave,
     required this.onCancel,
     this.initialData,
+    this.pendingLocalId,
+    this.pendingPayload,
   });
 
   @override
@@ -91,6 +103,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
   bool _isLoadingMunicipalities = false;
   bool _isLoadingBarangays = false;
   bool _didApplyInitialMunicipality = false;
+  String? _initialMunicipalityName;
   bool _locationPermissionGranted = false;
   bool _isCapturingLocation = false;
   bool _isSaving = false;
@@ -103,32 +116,94 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
     super.initState();
 
     final initial = widget.initialData;
-    _surveyDate = initial?.surveyDate ?? DateTime.now();
-
-    _speciesDetails = initial == null
-        ? <_SpeciesDetail>[]
-        : initial.speciesDetails.isNotEmpty
-            ? List<_SpeciesDetail>.from(initial.speciesDetails)
-            : <_SpeciesDetail>[
-                _SpeciesDetail(
-                  speciesType: initial.entryType,
-                  name: initial.speciesName,
-                  scientificName: initial.scientificName,
-                  photoPath: null,
-                ),
-              ];
-    _selectedBarangay = initial?.barangay.trim().isNotEmpty == true
-        ? initial!.barangay.trim()
+    final pendingPayload = widget.pendingPayload;
+    final pendingSurvey = pendingPayload != null
+        ? Map<String, dynamic>.from(
+            (pendingPayload['survey'] as Map?) ?? const {})
         : null;
-    _activityNameController = TextEditingController(
-      text: initial?.activityName ?? '',
-    );
-    _observerController = TextEditingController(
-      text: initial?.observer ?? '',
-    );
-    _areaController = TextEditingController(
-      text: initial?.areaHectares?.toStringAsFixed(2) ?? '',
-    );
+
+    if (pendingSurvey != null) {
+      // ── Seed from a queued (not-yet-synced) draft ─────────────────────
+      _surveyDate =
+          DateTime.tryParse(pendingSurvey['surveyDate'] as String? ?? '') ??
+              DateTime.now();
+
+      final pendingSpeciesRows = ((pendingPayload!['species'] as List?) ?? [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      _speciesDetails = pendingSpeciesRows.map((row) {
+        final classification = (row['classification'] as String?)?.trim();
+        return _SpeciesDetail(
+          speciesType: (row['species_type'] ?? '').toString(),
+          name: (row['name'] ?? '').toString(),
+          scientificName: (row['scientific_name'] ?? '').toString(),
+          classification:
+              classification != null && classification.isNotEmpty
+                  ? classification
+                  : null,
+          photoPath: row['stablePhotoPath'] as String?,
+        );
+      }).toList();
+
+      final pendingCoordinateRows =
+          ((pendingPayload['coordinates'] as List?) ?? [])
+              .map((r) => Map<String, dynamic>.from(r as Map))
+              .toList();
+      _capturedCoordinates.addAll(pendingCoordinateRows);
+
+      final pendingMunicipality =
+          (pendingSurvey['municipality'] as String?)?.trim();
+      _initialMunicipalityName =
+          (pendingMunicipality != null && pendingMunicipality.isNotEmpty)
+              ? pendingMunicipality
+              : null;
+
+      final pendingBarangay = (pendingSurvey['barangay'] as String?)?.trim();
+      _selectedBarangay =
+          (pendingBarangay != null && pendingBarangay.isNotEmpty)
+              ? pendingBarangay
+              : null;
+
+      _activityNameController = TextEditingController(
+        text: (pendingSurvey['activityName'] as String?) ?? '',
+      );
+      _observerController = TextEditingController(
+        text: (pendingSurvey['observer'] as String?) ?? '',
+      );
+      _areaController = TextEditingController(
+        text: (pendingSurvey['area'] as num?)?.toStringAsFixed(2) ?? '',
+      );
+    } else {
+      _surveyDate = initial?.surveyDate ?? DateTime.now();
+
+      _speciesDetails = initial == null
+          ? <_SpeciesDetail>[]
+          : initial.speciesDetails.isNotEmpty
+              ? List<_SpeciesDetail>.from(initial.speciesDetails)
+              : <_SpeciesDetail>[
+                  _SpeciesDetail(
+                    speciesType: initial.entryType,
+                    name: initial.speciesName,
+                    scientificName: initial.scientificName,
+                    photoPath: null,
+                  ),
+                ];
+      _initialMunicipalityName = initial?.municipality.trim().isNotEmpty == true
+          ? initial!.municipality.trim()
+          : null;
+      _selectedBarangay = initial?.barangay.trim().isNotEmpty == true
+          ? initial!.barangay.trim()
+          : null;
+      _activityNameController = TextEditingController(
+        text: initial?.activityName ?? '',
+      );
+      _observerController = TextEditingController(
+        text: initial?.observer ?? '',
+      );
+      _areaController = TextEditingController(
+        text: initial?.areaHectares?.toStringAsFixed(2) ?? '',
+      );
+    }
 
     _loadMunicipalityOptions();
     _requestLocationPermission();
@@ -152,10 +227,10 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
         _municipalityOptions = options;
       });
 
-      final initial = widget.initialData;
-      if (!_didApplyInitialMunicipality && initial != null) {
+      final initialMunicipalityName = _initialMunicipalityName;
+      if (!_didApplyInitialMunicipality && initialMunicipalityName != null) {
         _didApplyInitialMunicipality = true;
-        final initialMunicipality = initial.municipality.trim().toLowerCase();
+        final initialMunicipality = initialMunicipalityName.toLowerCase();
 
         LookupOption? match;
         for (final option in options) {
@@ -1301,6 +1376,65 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
     });
   }
 
+  // ── Offline payload helpers ────────────────────────────────────────────
+
+  Map<String, dynamic> _buildOfflineSurveyPayload({
+    required String authUserId,
+    required String activityName,
+    required String municipality,
+    required String barangay,
+    required String? details,
+    required double? parsedArea,
+  }) {
+    return {
+      'userId': authUserId,
+      'userSeqId': AuthSession.currentUser?.seqId,
+      'municipality': municipality,
+      'barangay': barangay,
+      'activityName': activityName,
+      'surveyDate': _surveyDate.toIso8601String(),
+      'area': parsedArea,
+      'details': details,
+      'observer': _observerController.text.trim(),
+      'projectTypeId': 3,
+    };
+  }
+
+  /// Stages any not-yet-staged species photos (temp camera files) into
+  /// stable local storage and returns the `species` payload list. Photos
+  /// that were already staged in a previous offline save (their path
+  /// already lives under the offline photos directory) are left alone.
+  Future<List<Map<String, dynamic>>> _buildOfflineSpeciesPayload() async {
+    final species = <Map<String, dynamic>>[];
+    for (final item in _speciesDetails) {
+      final photoPath = item.photoPath;
+      String? stablePhotoPath;
+      if (photoPath != null && photoPath.isNotEmpty) {
+        stablePhotoPath = photoPath.contains('offline_photos')
+            ? photoPath
+            : await OfflineSyncService.stagePhoto(photoPath);
+      }
+
+      species.add({
+        'species_type': item.speciesType,
+        'name': item.name,
+        'scientific_name': item.scientificName,
+        'classification': item.classification,
+        'stablePhotoPath': stablePhotoPath,
+      });
+    }
+    return species;
+  }
+
+  List<Map<String, dynamic>> _buildOfflineCoordinatesPayload() {
+    return _capturedCoordinates
+        .map((coord) => {
+              'lat': coord['lat'],
+              'lng': coord['lng'],
+            })
+        .toList();
+  }
+
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) {
       return;
@@ -1361,7 +1495,145 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
 
     final parsedArea = double.tryParse(_areaController.text.trim());
 
+    // ── Editing a pending (not-yet-synced) draft ──────────────────────────
+    // Skip connectivity checks and every Supabase/ApiService call — just
+    // rewrite the queued item in place.
+    if (widget.pendingLocalId != null) {
+      setState(() => _isSaving = true);
+      try {
+        final speciesPayload = await _buildOfflineSpeciesPayload();
+        final payload = {
+          'survey': _buildOfflineSurveyPayload(
+            authUserId: authUserId,
+            activityName: activityName,
+            municipality: municipality,
+            barangay: barangay,
+            details: details.isEmpty ? null : details,
+            parsedArea: parsedArea,
+          ),
+          'species': speciesPayload,
+          'coordinates': _buildOfflineCoordinatesPayload(),
+        };
+
+        await OfflineSyncService.updatePendingItem(
+          widget.pendingLocalId!,
+          payload,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+
+        widget.onSave(
+          FloraFaunaEntry(
+            id: widget.initialData?.id,
+            activityName: activityName,
+            entryType: entryType,
+            speciesName: speciesName,
+            scientificName: scientificName,
+            areaHectares: parsedArea,
+            municipality: municipality,
+            barangay: barangay,
+            surveyDate: _surveyDate,
+            observer: _observerController.text.trim(),
+            speciesDetails:
+                List<FloraFaunaSpeciesDetail>.unmodifiable(_speciesDetails),
+          ),
+        );
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to save data.')),
+        );
+      } finally {
+        if (mounted) {
+          setState(() => _isSaving = false);
+        }
+      }
+      return;
+    }
+    // ── End pending-draft edit path ────────────────────────────────────────
+
+    final isOnline = await OfflineSyncService.hasInternetConnection();
+    if (!mounted) return;
+
+    final isEditingSyncedRecord = widget.initialData?.id != null;
+
+    if (!isOnline && isEditingSyncedRecord) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Editing requires an internet connection.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSaving = true);
+
+    if (!isOnline) {
+      // ── Offline path: brand-new record, queue it for later sync ────────
+      try {
+        final speciesPayload = await _buildOfflineSpeciesPayload();
+        final payload = {
+          'survey': _buildOfflineSurveyPayload(
+            authUserId: authUserId,
+            activityName: activityName,
+            municipality: municipality,
+            barangay: barangay,
+            details: details.isEmpty ? null : details,
+            parsedArea: parsedArea,
+          ),
+          'species': speciesPayload,
+          'coordinates': _buildOfflineCoordinatesPayload(),
+        };
+
+        await OfflineSyncService.queueGenericRecord(
+          type: 'flora_fauna',
+          payload: payload,
+        );
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+
+        widget.onSave(
+          FloraFaunaEntry(
+            activityName: activityName,
+            entryType: entryType,
+            speciesName: speciesName,
+            scientificName: scientificName,
+            areaHectares: parsedArea,
+            municipality: municipality,
+            barangay: barangay,
+            surveyDate: _surveyDate,
+            observer: _observerController.text.trim(),
+            speciesDetails:
+                List<FloraFaunaSpeciesDetail>.unmodifiable(_speciesDetails),
+          ),
+        );
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Unable to save data.')),
+        );
+      } finally {
+        if (mounted) {
+          setState(() => _isSaving = false);
+        }
+      }
+      return;
+    }
+    // ── End offline path ─────────────────────────────────────────────────
 
     try {
       final savedSurvey = await ApiService.createFloraFaunaSurvey(
@@ -1445,6 +1717,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
               List<FloraFaunaSpeciesDetail>.unmodifiable(_speciesDetails),
         ),
       );
+
+      OfflineSyncService.syncAll().ignore();
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
