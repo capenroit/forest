@@ -4,6 +4,10 @@
 *.pyc
 *.swp
 .DS_Store
+
+# Database migration/diagnostic scripts — these describe schema, RLS
+# policies, and function internals and shouldn't be pushed to a public repo.
+*.sql
 .atom/
 .buildlog/
 .history
