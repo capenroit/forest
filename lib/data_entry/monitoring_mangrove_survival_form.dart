@@ -253,7 +253,12 @@ class _MonitoringMangroveSurvivalFormState
 
     bool hasInvalidSurviveValue = false;
     bool hasSurviveGreaterThanPlanted = false;
-    final speciesSurvival = <({int seedId, int numberTreeSurvived})>[];
+    final speciesSurvival = <({
+      int seedId,
+      int numberTreeSurvived,
+      String seedName,
+      int plantedCount,
+    })>[];
 
     for (final row in _survivalRows) {
       final raw = row.surviveController.text.trim();
@@ -266,7 +271,12 @@ class _MonitoringMangroveSurvivalFormState
         hasSurviveGreaterThanPlanted = true;
         break;
       }
-      speciesSurvival.add((seedId: row.seedId, numberTreeSurvived: survive));
+      speciesSurvival.add((
+        seedId: row.seedId,
+        numberTreeSurvived: survive,
+        seedName: row.species,
+        plantedCount: row.plantedCount,
+      ));
     }
 
     if (hasSurviveGreaterThanPlanted) {
@@ -330,13 +340,15 @@ class _MonitoringMangroveSurvivalFormState
 
         await ApiService.saveTreeSurvivalMonitoringRows(
           userId: authUserId,
+          userSeqId: AuthSession.currentUser?.seqId,
           activityId: activitySeqId,
           speciesSurvival: speciesSurvival,
           quarter: quarter,
           details: details.isEmpty ? null : details,
           date: parsedDate,
         );
-      })().timeout(
+      })()
+          .timeout(
         const Duration(seconds: 30),
         onTimeout: () => throw TimeoutException(
           'Saving is taking too long. Check your connection and try again.',

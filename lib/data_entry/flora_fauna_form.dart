@@ -32,6 +32,7 @@ typedef _SpeciesDetail = FloraFaunaSpeciesDetail;
 
 class FloraFaunaEntry {
   final int? id;
+  final String? userId;
   final String? activityName;
   final String entryType;
   final String speciesName;
@@ -45,6 +46,7 @@ class FloraFaunaEntry {
 
   const FloraFaunaEntry({
     this.id,
+    this.userId,
     this.activityName,
     required this.entryType,
     required this.speciesName,
@@ -1365,6 +1367,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
       final savedSurvey = await ApiService.createFloraFaunaSurvey(
         id: widget.initialData?.id,
         userId: authUserId,
+        userSeqId: AuthSession.currentUser?.seqId,
         municipality: municipality,
         barangay: barangay,
         activityName: activityName,

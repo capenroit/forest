@@ -14,6 +14,7 @@ class SeedDetail {
 
 class SeedForForestEntry {
   final int? id;
+  final String? userId;
   final String donorName;
   final List<SeedDetail> seedDetails;
   final DateTime date;
@@ -25,6 +26,7 @@ class SeedForForestEntry {
 
   const SeedForForestEntry({
     this.id,
+    this.userId,
     required this.donorName,
     required this.seedDetails,
     required this.date,

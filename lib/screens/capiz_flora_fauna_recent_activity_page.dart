@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data_entry/flora_fauna_form.dart';
 import '../service/api_service.dart';
+import '../service/auth_session.dart';
 import '../widget/activity_photos_dialog.dart';
 import '../widget/side_panel.dart';
 
@@ -53,6 +54,9 @@ class _CapizFloraFaunaRecentActivityPageState
 
         return FloraFaunaEntry(
           id: (row['id'] as num?)?.toInt(),
+          userId: (row['user_id'] ?? '').toString().isEmpty
+              ? null
+              : row['user_id'].toString(),
           activityName: activityName,
           entryType: entryType,
           speciesName: speciesName,
@@ -359,7 +363,7 @@ class _CapizFloraFaunaRecentActivityPageState
               child: Text(
                 'Recent Activity',
                 style: TextStyle(
-                  fontSize: 32,
+                  fontSize: 22,
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF23253B),
                 ),
@@ -504,7 +508,7 @@ class _RecentActivityCard extends StatelessWidget {
                     Text(
                       activity.speciesName,
                       style: const TextStyle(
-                        fontSize: 22,
+                        fontSize: 15,
                         fontWeight: FontWeight.w700,
                         color: Color(0xFF1F2937),
                       ),
@@ -513,7 +517,7 @@ class _RecentActivityCard extends StatelessWidget {
                     Text(
                       activity.scientificName,
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 12,
                         fontStyle: FontStyle.italic,
                         color: Color(0xFF4B5563),
                       ),
@@ -540,8 +544,8 @@ class _RecentActivityCard extends StatelessWidget {
                         onRemove();
                       }
                     },
-                    itemBuilder: (context) => const [
-                      PopupMenuItem<String>(
+                    itemBuilder: (context) => [
+                      const PopupMenuItem<String>(
                         value: _menuPhotos,
                         child: Row(
                           children: [
@@ -551,7 +555,7 @@ class _RecentActivityCard extends StatelessWidget {
                           ],
                         ),
                       ),
-                      PopupMenuItem<String>(
+                      const PopupMenuItem<String>(
                         value: _menuEdit,
                         child: Row(
                           children: [
@@ -561,17 +565,20 @@ class _RecentActivityCard extends StatelessWidget {
                           ],
                         ),
                       ),
-                      PopupMenuItem<String>(
-                        value: _menuRemove,
-                        child: Row(
-                          children: [
-                            Icon(Icons.delete_outline,
-                                size: 18, color: Colors.red),
-                            SizedBox(width: 10),
-                            Text('Remove', style: TextStyle(color: Colors.red)),
-                          ],
+                      // Only the record's creator or an admin can delete it.
+                      if (AuthSession.canDelete(activity.userId))
+                        const PopupMenuItem<String>(
+                          value: _menuRemove,
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline,
+                                  size: 18, color: Colors.red),
+                              SizedBox(width: 10),
+                              Text('Remove',
+                                  style: TextStyle(color: Colors.red)),
+                            ],
+                          ),
                         ),
-                      ),
                     ],
                   ),
                   Container(
@@ -588,7 +595,7 @@ class _RecentActivityCard extends StatelessWidget {
                       style: TextStyle(
                         color: chipColor,
                         fontWeight: FontWeight.w600,
-                        fontSize: 16,
+                        fontSize: 12,
                       ),
                     ),
                   ),
@@ -647,7 +654,7 @@ class _LabelValue extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              fontSize: 15,
+              fontSize: 11,
               fontWeight: FontWeight.w600,
               color: Color(0xFF6B7280),
             ),
@@ -656,7 +663,7 @@ class _LabelValue extends StatelessWidget {
           Text(
             value,
             style: const TextStyle(
-              fontSize: 17,
+              fontSize: 13,
               fontWeight: FontWeight.w600,
               color: Color(0xFF111827),
             ),

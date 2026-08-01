@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data_entry/marine_protected_area_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
+import '../service/auth_session.dart';
 import '../widget/side_panel.dart';
 
 class MarineProtectedAreaPage extends StatefulWidget {
@@ -245,7 +246,7 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
                   Text(
                     'Recent Activity',
                     style: TextStyle(
-                      fontSize: 32,
+                      fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: Color(0xFF23253B),
                     ),
@@ -387,15 +388,17 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
                     _deleteActivity(area);
                   }
                 },
-                itemBuilder: (context) => const [
-                  PopupMenuItem<_ActivityCardMenuAction>(
+                itemBuilder: (context) => [
+                  const PopupMenuItem<_ActivityCardMenuAction>(
                     value: _ActivityCardMenuAction.edit,
                     child: Text('Edit'),
                   ),
-                  PopupMenuItem<_ActivityCardMenuAction>(
-                    value: _ActivityCardMenuAction.delete,
-                    child: Text('Delete'),
-                  ),
+                  // Only the record's creator or an admin can delete it.
+                  if (AuthSession.canDeleteBySeqId(area.userid))
+                    const PopupMenuItem<_ActivityCardMenuAction>(
+                      value: _ActivityCardMenuAction.delete,
+                      child: Text('Delete'),
+                    ),
                 ],
               ),
             ],

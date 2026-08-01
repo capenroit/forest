@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../data_entry/seed_for_forest_form.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
 import '../widget/side_panel.dart';
@@ -10,12 +11,17 @@ class _PropagatedDonation {
   final String donorName;
   final DateTime donatedDate;
   final int totalCount;
+  // Set when this donation was created through the mangrove propagation
+  // form, which already collects the nursery up front — conversion reuses
+  // it instead of asking the user to pick one again.
+  final int? nurseryId;
 
   const _PropagatedDonation({
     required this.id,
     required this.donorName,
     required this.donatedDate,
     required this.totalCount,
+    this.nurseryId,
   });
 }
 
@@ -154,13 +160,55 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
 
   Future<void> _loadPropagatedCount() async {
     try {
-      final rows = await Supabase.instance.client
+      final supabase = Supabase.instance.client;
+      final rows = await supabase
           .from('seed_donation')
-          .select('id')
+          .select('id, nursery_id')
           .eq('status', 'PROPAGATED');
 
+      final propagatedRows = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+
+      // Keep this in sync with _openDataEntryDialog's own-division filter so
+      // the badge count matches what that dialog actually lists.
+      final divisionTypeId = AuthSession.currentUser?.divisionTypeId;
+      int count;
+      if (divisionTypeId == null) {
+        count = propagatedRows.length;
+      } else {
+        final nurseryIdsInUse = propagatedRows
+            .map((row) => (row['nursery_id'] as num?)?.toInt())
+            .whereType<int>()
+            .toSet()
+            .toList();
+
+        Set<int> ownDivisionNurseryIds = {};
+        if (nurseryIdsInUse.isNotEmpty) {
+          final ownNurseryRows = await supabase
+              .from('seedling_nursery')
+              .select('seq_id')
+              .inFilter('seq_id', nurseryIdsInUse)
+              .eq('div_type', divisionTypeId);
+
+          ownDivisionNurseryIds = (ownNurseryRows as List<dynamic>)
+              .cast<Map<String, dynamic>>()
+              .map((row) => (row['seq_id'] as num?)?.toInt())
+              .whereType<int>()
+              .toSet();
+        }
+
+        // Entries with no nursery_id (plain "Seed for a Forest" donations)
+        // belong to FMS (division 1) only. Nursery-tied entries are
+        // filtered to whichever division owns that nursery.
+        count = propagatedRows.where((row) {
+          final nurseryId = (row['nursery_id'] as num?)?.toInt();
+          return nurseryId == null
+              ? divisionTypeId == 1
+              : ownDivisionNurseryIds.contains(nurseryId);
+        }).length;
+      }
+
       if (!mounted) return;
-      setState(() => _propagatedCount = (rows as List<dynamic>).length);
+      setState(() => _propagatedCount = count);
     } catch (_) {
       // Badge just won't show if this fails.
     }
@@ -307,55 +355,89 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         padding: EdgeInsets.only(
           bottom: !_isLoading && _errorMessage == null ? 64 : 0,
         ),
-        child: Stack(
-          clipBehavior: Clip.none,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              decoration: BoxDecoration(
-                color: const Color.fromARGB(255, 200, 230, 220),
-                borderRadius: BorderRadius.circular(50),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.15),
-                    blurRadius: 12,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: IconButton(
-                onPressed: _openDataEntryDialog,
-                icon: const Icon(
-                  Icons.list_alt_rounded,
-                  color: Color.fromARGB(255, 31, 103, 78),
+            // CRM (division 2) can add seedling stock directly instead of
+            // going through the donation-propagation flow.
+            if (AuthSession.currentUser?.divisionTypeId == 2) ...[
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color.fromARGB(255, 200, 230, 220),
+                  borderRadius: BorderRadius.circular(50),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-                iconSize: 35,
-                tooltip: 'View propagated seeds',
-              ),
-            ),
-            if (_propagatedCount > 0)
-              Positioned(
-                top: -2,
-                right: -2,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                  constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
-                  decoration: BoxDecoration(
-                    color: Colors.red,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.white, width: 1.5),
+                child: IconButton(
+                  onPressed: _openAddPropagationDialog,
+                  icon: const Icon(
+                    Icons.add,
+                    color: Color.fromARGB(255, 31, 103, 78),
                   ),
-                  alignment: Alignment.center,
-                  child: Text(
-                    _propagatedCount > 99 ? '99+' : '$_propagatedCount',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      height: 1,
+                  iconSize: 35,
+                  tooltip: 'Add seed propagation',
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color.fromARGB(255, 200, 230, 220),
+                    borderRadius: BorderRadius.circular(50),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.15),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: IconButton(
+                    onPressed: _openDataEntryDialog,
+                    icon: const Icon(
+                      Icons.list_alt_rounded,
+                      color: Color.fromARGB(255, 31, 103, 78),
+                    ),
+                    iconSize: 35,
+                    tooltip: 'View propagated seeds',
+                  ),
+                ),
+                if (_propagatedCount > 0)
+                  Positioned(
+                    top: -2,
+                    right: -2,
+                    child: Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      constraints:
+                          const BoxConstraints(minWidth: 18, minHeight: 18),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Colors.white, width: 1.5),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        _propagatedCount > 99 ? '99+' : '$_propagatedCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          height: 1,
+                        ),
+                      ),
                     ),
                   ),
-                ),
-              ),
+              ],
+            ),
           ],
         ),
       ),
@@ -854,6 +936,37 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
     }
   }
 
+  Future<void> _openAddPropagationDialog() async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: SeedForForestForm(
+          donorFieldLabel: 'Propagated By',
+          showNurseryField: true,
+          formTitle: 'Mangrove Data Entry',
+          formSubtitle: 'Record propagation and seed list details',
+          useMangroveSpeciesList: true,
+          onSave: (entry) {
+            Navigator.pop(dialogContext);
+            if (!mounted) return;
+            _loadPropagatedCount();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Seed propagation record added.')),
+            );
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> _openDataEntryDialog() async {
     try {
       if (!mounted) return;
@@ -862,19 +975,57 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
 
       final response = await supabase
           .from('seed_donation')
-          .select('id, donor_name, donated_date, total_count, status')
+          .select('id, donor_name, donated_date, total_count, status, nursery_id')
           .eq('status', 'PROPAGATED')
           .order('donated_date', ascending: false);
 
-      final donations = (response as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .map((row) {
+      final propagatedRows = (response as List<dynamic>).cast<Map<String, dynamic>>();
+
+      // Donations tied to a nursery are scoped to the logged-in user's own
+      // division; donations with no nursery_id (plain "Seed for a Forest"
+      // entries) are FMS (division 1) only.
+      final divisionTypeId = AuthSession.currentUser?.divisionTypeId;
+      final nurseryIdsInUse = propagatedRows
+          .map((row) => (row['nursery_id'] as num?)?.toInt())
+          .whereType<int>()
+          .toSet()
+          .toList();
+
+      Set<int> ownDivisionNurseryIds = {};
+      if (divisionTypeId != null && nurseryIdsInUse.isNotEmpty) {
+        final ownNurseryRows = await supabase
+            .from('seedling_nursery')
+            .select('seq_id')
+            .inFilter('seq_id', nurseryIdsInUse)
+            .eq('div_type', divisionTypeId);
+
+        ownDivisionNurseryIds = (ownNurseryRows as List<dynamic>)
+            .cast<Map<String, dynamic>>()
+            .map((row) => (row['seq_id'] as num?)?.toInt())
+            .whereType<int>()
+            .toSet();
+      }
+
+      // Entries with no nursery_id (plain "Seed for a Forest" donations)
+      // belong to FMS (division 1) only. Nursery-tied entries are filtered
+      // to whichever division owns that nursery.
+      final filteredRows = divisionTypeId == null
+          ? propagatedRows
+          : propagatedRows.where((row) {
+              final nurseryId = (row['nursery_id'] as num?)?.toInt();
+              return nurseryId == null
+                  ? divisionTypeId == 1
+                  : ownDivisionNurseryIds.contains(nurseryId);
+            }).toList();
+
+      final donations = filteredRows.map((row) {
             final donatedDateRaw = (row['donated_date'] ?? '').toString();
             return _PropagatedDonation(
               id: (row['id'] as num).toInt(),
               donorName: (row['donor_name'] ?? '').toString(),
               donatedDate: DateTime.tryParse(donatedDateRaw) ?? DateTime.now(),
               totalCount: (row['total_count'] as num?)?.toInt() ?? 0,
+              nurseryId: (row['nursery_id'] as num?)?.toInt(),
             );
           })
           .toList();
@@ -884,24 +1035,34 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
       if (donationIds.isNotEmpty) {
         final detailRows = await supabase
             .from('seed_donation_data')
-            .select('seed_donation_id, seed_id, seed_count, species_type')
+            .select('seed_donation_id, seed_id, seed_count, species_type, is_mangrove')
             .inFilter('seed_donation_id', donationIds);
 
         final parsedDetails =
             (detailRows as List<dynamic>).cast<Map<String, dynamic>>();
 
-        final detailSeedIds = parsedDetails
-            .map((row) => (row['seed_id'] as num?)?.toInt())
-            .whereType<int>()
-            .toSet()
-            .toList();
+        // seed_id resolves against seedling_list normally, but against
+        // mangrove_list for rows saved from the mangrove propagation form
+        // (flagged by is_mangrove) — the two id spaces aren't related, so
+        // each group is looked up against its own table.
+        final regularSeedIds = <int>{};
+        final mangroveSeedIds = <int>{};
+        for (final row in parsedDetails) {
+          final seedId = (row['seed_id'] as num?)?.toInt();
+          if (seedId == null) continue;
+          if (row['is_mangrove'] == true) {
+            mangroveSeedIds.add(seedId);
+          } else {
+            regularSeedIds.add(seedId);
+          }
+        }
 
         final Map<int, String> seedNameById = {};
-        if (detailSeedIds.isNotEmpty) {
+        if (regularSeedIds.isNotEmpty) {
           final seedRows = await supabase
               .from('seedling_list')
               .select('seq_id, seedling_name')
-              .inFilter('seq_id', detailSeedIds);
+              .inFilter('seq_id', regularSeedIds.toList());
 
           for (final row
               in (seedRows as List<dynamic>).cast<Map<String, dynamic>>()) {
@@ -913,15 +1074,35 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
           }
         }
 
+        final Map<int, String> mangroveNameById = {};
+        if (mangroveSeedIds.isNotEmpty) {
+          final mangroveRows = await supabase
+              .from('mangrove_list')
+              .select('id, name')
+              .inFilter('id', mangroveSeedIds.toList());
+
+          for (final row
+              in (mangroveRows as List<dynamic>).cast<Map<String, dynamic>>()) {
+            final id = (row['id'] as num?)?.toInt();
+            final name = (row['name'] ?? '').toString();
+            if (id != null) {
+              mangroveNameById[id] = name;
+            }
+          }
+        }
+
         for (final row in parsedDetails) {
           final donationId = (row['seed_donation_id'] as num?)?.toInt();
           if (donationId == null) continue;
           final seedId = (row['seed_id'] as num?)?.toInt() ?? 0;
+          final isMangrove = row['is_mangrove'] == true;
+          final resolvedName =
+              isMangrove ? mangroveNameById[seedId] : seedNameById[seedId];
 
           seedDetailsByDonationId.putIfAbsent(donationId, () => []).add(
                 _SeedDetailRow(
                   seedId: seedId,
-                  speciesName: seedNameById[seedId] ?? 'Seed $seedId',
+                  speciesName: resolvedName ?? 'Seed $seedId',
                   speciesType: (row['species_type'] ?? '').toString(),
                   propagatedCount: (row['seed_count'] as num?)?.toInt() ?? 0,
                 ),
@@ -929,8 +1110,10 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         }
       }
 
-      final nurseryRows =
-          await supabase.from('seedling_nursery').select('seq_id, name');
+      var nurseryQuery = supabase.from('seedling_nursery').select('seq_id, name');
+      final nurseryRows = divisionTypeId != null
+          ? await nurseryQuery.eq('div_type', divisionTypeId)
+          : await nurseryQuery;
       final nurseryOptions = (nurseryRows as List<dynamic>)
           .map((row) => LookupOption(
                 id: (row['seq_id'] as num).toInt(),
@@ -952,11 +1135,14 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         }
       }
 
+      final nurseryById = {
+        for (final option in nurseryOptions) option.id: option,
+      };
       final rows = donations
           .map((d) => _PropagatedRowState(
                 donation: d,
                 seedDetails: seedDetailsByDonationId[d.id] ?? [],
-              ))
+              )..nursery = d.nurseryId != null ? nurseryById[d.nurseryId] : null)
           .toList();
 
       if (!mounted) return;
@@ -1100,11 +1286,11 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            const Text(
                               'Propagated Seeds',
                               style: TextStyle(
                                 fontSize: 17,
@@ -1112,10 +1298,13 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                                 color: Colors.white,
                               ),
                             ),
-                            SizedBox(height: 2),
+                            const SizedBox(height: 2),
                             Text(
-                              'Ready to plant, from Seed for a Forest',
-                              style: TextStyle(fontSize: 12, color: Colors.white70),
+                              AuthSession.currentUser?.divisionTypeId == 2
+                                  ? 'Ready to plant'
+                                  : 'Ready to plant, from Seed for a Forest',
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white70),
                             ),
                           ],
                         ),
@@ -1141,6 +1330,10 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                             final row = rows[index];
                             final donation = row.donation;
                             final needsNursery = row.status == 'PLANTABLE';
+                            // Mangrove propagation entries already picked a
+                            // nursery up front — reuse it instead of asking
+                            // again here.
+                            final hasFixedNursery = donation.nurseryId != null;
                             final plantableValid = row.seedDetails
                                 .every((detail) => _isPlantableValid(detail));
                             final hasPlantableQuantity = row.seedDetails.any(
@@ -1366,38 +1559,70 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
                                       if (needsNursery) ...[
                                         const SizedBox(width: 8),
                                         Expanded(
-                                          child: DropdownButtonFormField<
-                                              LookupOption>(
-                                            initialValue: row.nursery,
-                                            isDense: true,
-                                            items: nurseryOptions
-                                                .map((option) => DropdownMenuItem(
-                                                      value: option,
-                                                      child: Text(option.name),
-                                                    ))
-                                                .toList(),
-                                            onChanged: row.isConverting
-                                                ? null
-                                                : (value) => setDialogState(
-                                                    () => row.nursery = value),
-                                            decoration: InputDecoration(
-                                              isDense: true,
-                                              hintText: 'Nursery',
-                                              contentPadding:
-                                                  const EdgeInsets.symmetric(
-                                                      horizontal: 10,
-                                                      vertical: 8),
-                                              filled: true,
-                                              fillColor: Colors.white,
-                                              border: OutlineInputBorder(
-                                                borderRadius:
-                                                    BorderRadius.circular(8),
-                                                borderSide: BorderSide(
-                                                    color:
-                                                        Colors.grey.shade300),
-                                              ),
-                                            ),
-                                          ),
+                                          child: hasFixedNursery
+                                              ? Container(
+                                                  height: 40,
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                          horizontal: 10),
+                                                  alignment: Alignment.centerLeft,
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.grey.shade100,
+                                                    borderRadius:
+                                                        BorderRadius.circular(8),
+                                                    border: Border.all(
+                                                        color: Colors
+                                                            .grey.shade300),
+                                                  ),
+                                                  child: Text(
+                                                    row.nursery?.name ??
+                                                        'Nursery',
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style: TextStyle(
+                                                      fontSize: 13,
+                                                      color:
+                                                          Colors.grey.shade800,
+                                                    ),
+                                                  ),
+                                                )
+                                              : DropdownButtonFormField<
+                                                  LookupOption>(
+                                                  initialValue: row.nursery,
+                                                  isDense: true,
+                                                  items: nurseryOptions
+                                                      .map((option) =>
+                                                          DropdownMenuItem(
+                                                            value: option,
+                                                            child:
+                                                                Text(option.name),
+                                                          ))
+                                                      .toList(),
+                                                  onChanged: row.isConverting
+                                                      ? null
+                                                      : (value) => setDialogState(
+                                                          () =>
+                                                              row.nursery = value),
+                                                  decoration: InputDecoration(
+                                                    isDense: true,
+                                                    hintText: 'Nursery',
+                                                    contentPadding:
+                                                        const EdgeInsets
+                                                            .symmetric(
+                                                            horizontal: 10,
+                                                            vertical: 8),
+                                                    filled: true,
+                                                    fillColor: Colors.white,
+                                                    border: OutlineInputBorder(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              8),
+                                                      borderSide: BorderSide(
+                                                          color: Colors
+                                                              .grey.shade300),
+                                                    ),
+                                                  ),
+                                                ),
                                         ),
                                         const SizedBox(width: 8),
                                         SizedBox(

@@ -32,10 +32,13 @@ class _DashboardPageState extends State<DashboardPage>
   int _treeGrowingCount = 0;
   int _totalSeedlingAvailable = 0;
   int _totalSeedlingRelease = 0;
+  int _totalSeedlingSurvive = 0;
   bool _isLoadingCount = true;
   bool _isCachedData = false;
   bool _isLoadingSeedlingStats = true;
   bool _isCachedSeedlingStats = false;
+  bool _isLoadingSurviveStats = true;
+  bool _isCachedSurviveStats = false;
   bool _isRefreshing = false;
 
   List<Marker> _markers = [];
@@ -90,6 +93,7 @@ class _DashboardPageState extends State<DashboardPage>
       await Future.wait([
         _loadTreeGrowingCount(),
         _loadSeedlingStats(),
+        _loadSurviveStats(),
         _loadTreeGrowingMarkers(),
       ]);
     } finally {
@@ -219,6 +223,90 @@ class _DashboardPageState extends State<DashboardPage>
       if (!mounted) return;
       setState(() {
         _isLoadingSeedlingStats = false;
+      });
+    }
+  }
+
+  /// Sums number_tree_survived from tree_survival_monitoring, restricted to
+  /// activities whose tree_growing row is project_type_id 1 (Tree Growing)
+  /// — that table is shared with Mangrove Survival (project_type_id 6),
+  /// same disambiguation used by the Report page and the recent-activity
+  /// list pages.
+  Future<void> _loadSurviveStats() async {
+    try {
+      final result = await Connectivity().checkConnectivity();
+      if (result.contains(ConnectivityResult.none)) {
+        await _loadSurviveStatsFromCache();
+        return;
+      }
+
+      final survivalRows = await Supabase.instance.client
+          .from('tree_survival_monitoring')
+          .select()
+          .eq('is_deleted', 0)
+          .timeout(const Duration(seconds: 5));
+
+      final rows = List<Map<String, dynamic>>.from(survivalRows);
+      final activityIds = rows
+          .map((row) => (row['activity_id'] as num?)?.toInt())
+          .whereType<int>()
+          .toSet()
+          .toList();
+
+      var treeGrowingActivityIds = <int>{};
+      if (activityIds.isNotEmpty) {
+        final treeGrowingRows = await Supabase.instance.client
+            .from('tree_growing')
+            .select('seq_id, project_type_id')
+            .inFilter('seq_id', activityIds)
+            .timeout(const Duration(seconds: 5));
+
+        treeGrowingActivityIds = List<Map<String, dynamic>>.from(treeGrowingRows)
+            .where((row) => (row['project_type_id'] as num?)?.toInt() == 1)
+            .map((row) => (row['seq_id'] as num).toInt())
+            .toSet();
+      }
+
+      int surviveTotal = 0;
+      for (final row in rows) {
+        final activityId = (row['activity_id'] as num?)?.toInt();
+        if (activityId == null || !treeGrowingActivityIds.contains(activityId)) {
+          continue;
+        }
+        surviveTotal += (row['number_tree_survived'] as num?)?.toInt() ??
+            (row['number_tree_sur'] as num?)?.toInt() ??
+            0;
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('total_seedling_survive', surviveTotal);
+
+      if (!mounted) return;
+      setState(() {
+        _totalSeedlingSurvive = surviveTotal;
+        _isLoadingSurviveStats = false;
+        _isCachedSurviveStats = false;
+      });
+    } catch (_) {
+      await _loadSurviveStatsFromCache();
+    }
+  }
+
+  Future<void> _loadSurviveStatsFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cachedSurvive = prefs.getInt('total_seedling_survive');
+
+      if (!mounted) return;
+      setState(() {
+        _totalSeedlingSurvive = cachedSurvive ?? 0;
+        _isLoadingSurviveStats = false;
+        _isCachedSurviveStats = cachedSurvive != null;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isLoadingSurviveStats = false;
       });
     }
   }
@@ -1378,12 +1466,12 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             const SizedBox(height: 24),
             GridView.count(
-              crossAxisCount: 3,
+              crossAxisCount: 2,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
-              childAspectRatio: 1.45,
+              childAspectRatio: 1.9,
               children: [
                 _buildStatCard(
                   title: 'Total Tree Growing Activity',
@@ -1403,6 +1491,13 @@ class _DashboardPageState extends State<DashboardPage>
                       ? '...'
                       : '$_totalSeedlingRelease',
                   trend: _isCachedSeedlingStats ? 'Cached' : 'Live',
+                ),
+                _buildStatCard(
+                  title: 'Total Seedling Survive',
+                  value: _isLoadingSurviveStats
+                      ? '...'
+                      : '$_totalSeedlingSurvive',
+                  trend: _isCachedSurviveStats ? 'Cached' : 'Live',
                 ),
               ],
             ),

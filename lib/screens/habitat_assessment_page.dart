@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data_entry/habitat_assessment_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
+import '../service/auth_session.dart';
 import '../widget/side_panel.dart';
 
 class HabitatAssessmentPage extends StatefulWidget {
@@ -285,7 +286,7 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
                   Text(
                     'Recent Activity',
                     style: TextStyle(
-                      fontSize: 32,
+                      fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: Color(0xFF23253B),
                     ),
@@ -433,15 +434,17 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
                     _deleteActivity(assessment);
                   }
                 },
-                itemBuilder: (context) => const [
-                  PopupMenuItem<_ActivityCardMenuAction>(
+                itemBuilder: (context) => [
+                  const PopupMenuItem<_ActivityCardMenuAction>(
                     value: _ActivityCardMenuAction.edit,
                     child: Text('Edit'),
                   ),
-                  PopupMenuItem<_ActivityCardMenuAction>(
-                    value: _ActivityCardMenuAction.delete,
-                    child: Text('Delete'),
-                  ),
+                  // Only the record's creator or an admin can delete it.
+                  if (AuthSession.canDeleteBySeqId(assessment.userid))
+                    const PopupMenuItem<_ActivityCardMenuAction>(
+                      value: _ActivityCardMenuAction.delete,
+                      child: Text('Delete'),
+                    ),
                 ],
               ),
             ],

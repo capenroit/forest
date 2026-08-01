@@ -447,19 +447,33 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final flattened = <Map<String, dynamic>>[];
     for (final row in rows) {
       final activityId = _parseNullableInt(row['activity_id']);
-      final seedId = _parseNullableInt(row['seed_id']);
-      final seedRow = seedId != null ? seedRowById[seedId] : null;
-
-      if (activityId == null || seedRow == null) {
-        // No matching tree_growing_data row for this seed_id — omit it.
-        continue;
-      }
+      if (activityId == null) continue;
 
       final treeGrowingRow = treeGrowingBySeqId[activityId];
       if (_parseNullableInt(treeGrowingRow?['project_type_id']) !=
           expectedProjectTypeId) {
         // Belongs to the other project type sharing this table — omit it.
         continue;
+      }
+
+      // Newer rows carry their own seed_name/planted_count (saved directly
+      // by the monitoring form), which is what's shown when present. Older
+      // rows fall back to the seed_id -> tree_growing_data.id join, which
+      // breaks once that activity's seedling list gets edited
+      // (replaceTreeGrowingDataRows deletes and re-inserts those rows with
+      // fresh ids, orphaning any seed_id saved before the edit) — for
+      // those, still show the row rather than silently dropping it.
+      final storedSeedName = (row['seed_name'] as String?)?.trim();
+      final storedPlantedCount = _parseNullableInt(row['planted_count']);
+
+      String? treeSpecies = storedSeedName?.isNotEmpty == true ? storedSeedName : null;
+      int? numberOfTrees = storedPlantedCount;
+
+      if (treeSpecies == null || numberOfTrees == null) {
+        final seedId = _parseNullableInt(row['seed_id']);
+        final seedRow = seedId != null ? seedRowById[seedId] : null;
+        treeSpecies ??= (seedRow?['seed_name'] as String?);
+        numberOfTrees ??= _parseNullableInt(seedRow?['seedling_count']);
       }
 
       final quarter = row['quarter'];
@@ -471,8 +485,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         'municipality': treeGrowingRow?['municipality'] ?? '',
         'barangay': treeGrowingRow?['barangay'] ?? '',
         'area_cover': treeGrowingRow?['area_cover'],
-        'tree_species': seedRow['seed_name'],
-        'number_of_trees': seedRow['seedling_count'],
+        'tree_species': treeSpecies ?? 'Unspecified',
+        'number_of_trees': numberOfTrees,
         'quarter_label': quarterLabel,
       });
     }
@@ -496,11 +510,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
     final Map<int, List<Map<String, dynamic>>> dataRowsByDonationId = {};
     final Map<int, String> seedNameById = {};
+    final Map<int, String> mangroveNameById = {};
 
     try {
       final dataRows = await Supabase.instance.client
           .from('seed_donation_data')
-          .select('seed_donation_id, seed_id, seed_count')
+          .select('seed_donation_id, seed_id, seed_count, is_mangrove')
           .inFilter('seed_donation_id', donationIds);
 
       final parsedDataRows = (dataRows as List).cast<Map<String, dynamic>>();
@@ -510,21 +525,43 @@ class _ReportsScreenState extends State<ReportsScreen> {
         dataRowsByDonationId.putIfAbsent(donationId, () => []).add(row);
       }
 
-      final seedIds = parsedDataRows
-          .map((row) => _parseNullableInt(row['seed_id']))
-          .whereType<int>()
-          .toSet()
-          .toList();
+      // seed_id resolves against seedling_list normally, but against
+      // mangrove_list for rows flagged is_mangrove (saved by the mangrove
+      // propagation form) — the two id spaces aren't related.
+      final seedIds = <int>{};
+      final mangroveSeedIds = <int>{};
+      for (final row in parsedDataRows) {
+        final id = _parseNullableInt(row['seed_id']);
+        if (id == null) continue;
+        if (row['is_mangrove'] == true) {
+          mangroveSeedIds.add(id);
+        } else {
+          seedIds.add(id);
+        }
+      }
 
       if (seedIds.isNotEmpty) {
         final seedRows = await Supabase.instance.client
             .from('seedling_list')
             .select('seq_id, seedling_name')
-            .inFilter('seq_id', seedIds);
+            .inFilter('seq_id', seedIds.toList());
         for (final row in (seedRows as List).cast<Map<String, dynamic>>()) {
           final id = _parseNullableInt(row['seq_id']);
           if (id != null) {
             seedNameById[id] = (row['seedling_name'] ?? '').toString();
+          }
+        }
+      }
+
+      if (mangroveSeedIds.isNotEmpty) {
+        final mangroveRows = await Supabase.instance.client
+            .from('mangrove_list')
+            .select('id, name')
+            .inFilter('id', mangroveSeedIds.toList());
+        for (final row in (mangroveRows as List).cast<Map<String, dynamic>>()) {
+          final id = _parseNullableInt(row['id']);
+          if (id != null) {
+            mangroveNameById[id] = (row['name'] ?? '').toString();
           }
         }
       }
@@ -546,10 +583,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
 
       for (final dataRow in dataRows) {
         final seedId = _parseNullableInt(dataRow['seed_id']);
+        final isMangrove = dataRow['is_mangrove'] == true;
+        final nameMap = isMangrove ? mangroveNameById : seedNameById;
         flattened.add({
           ...row,
           'seed_species_name':
-              seedId != null ? (seedNameById[seedId] ?? 'Unspecified') : 'Unspecified',
+              seedId != null ? (nameMap[seedId] ?? 'Unspecified') : 'Unspecified',
           'seed_count': dataRow['seed_count'],
         });
       }

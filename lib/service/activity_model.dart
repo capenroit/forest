@@ -31,6 +31,7 @@ class TreePlanting {
   final int? seqId;  // Sequence ID for photourl_area lookup
   final int? projectTypeId;
   final String userid;  // UUID from Supabase Auth
+  final int? userSeqId;  // users.seq_id, mirrors userid for display/consistency
   final String? activityName;
   final String barangay;
   final String municipality;
@@ -49,6 +50,7 @@ class TreePlanting {
     this.seqId,
     this.projectTypeId,
     required this.userid,
+    this.userSeqId,
     this.activityName,
     required this.barangay,
     required this.municipality,
@@ -69,7 +71,8 @@ class TreePlanting {
         id: json['id']?.toString(),
         seqId: json['seq_id'] as int?,
         projectTypeId: json['project_type_id'] as int? ?? json['projectTypeId'] as int?,
-        userid: (json['user_id'] ?? json['userid'] ?? '').toString(),
+        userid: (json['user_id'] ?? '').toString(),
+        userSeqId: (json['userid'] as num?)?.toInt(),
         activityName: json['activity_name'] as String? ?? json['activityName'] as String?,
         barangay: json['barangay'] as String? ?? '',
         municipality: json['municipality'] as String? ?? '',
@@ -99,6 +102,7 @@ class TreePlanting {
   Map<String, dynamic> toJson() {
     final json = {
       'user_id': userid,
+      'userid': userSeqId,
       'project_type_id': projectTypeId,
       'activity_name': activityName,
       'barangay': barangay,
@@ -202,6 +206,7 @@ class HabitatAssessment {
 
 class MarineProtectedArea {
   final int? id;
+  final int? userid;
   final String name;
   final String municipality;
   final String barangay;
@@ -211,6 +216,7 @@ class MarineProtectedArea {
 
   MarineProtectedArea({
     this.id,
+    this.userid,
     required this.name,
     required this.municipality,
     required this.barangay,
@@ -222,6 +228,7 @@ class MarineProtectedArea {
   factory MarineProtectedArea.fromJson(Map<String, dynamic> json) {
     return MarineProtectedArea(
       id: (json['id'] as num?)?.toInt(),
+      userid: (json['userid'] as num?)?.toInt(),
       name: json['name'] as String? ?? '',
       municipality: json['municipality'] as String? ?? '',
       barangay: json['barangay'] as String? ?? '',

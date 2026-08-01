@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data_entry/monitoring_tree_survival_form.dart';
 import '../service/api_service.dart';
+import '../service/auth_session.dart';
 import '../widget/side_panel.dart';
 
 class TreeSurvivalMonitoringPage extends StatefulWidget {
@@ -64,7 +65,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
                   Text(
                     'Recent Activity',
                     style: TextStyle(
-                      fontSize: 32,
+                      fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: Color(0xFF23253B),
                     ),
@@ -190,9 +191,9 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
                         label: 'Activity Name',
                         value: activityName.isNotEmpty ? activityName : 'N/A',
                         valueStyle: const TextStyle(
-                          fontSize: 24,
-                          height: 1.1,
-                          fontWeight: FontWeight.w800,
+                          fontSize: 13,
+                          height: 1.2,
+                          fontWeight: FontWeight.w700,
                           color: Color(0xFF25273B),
                         ),
                       ),
@@ -248,8 +249,8 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
                   _confirmAndRemove(row);
                 }
               },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
+              itemBuilder: (context) => [
+                const PopupMenuItem(
                   value: 'edit',
                   child: Row(
                     children: [
@@ -259,16 +260,18 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
                     ],
                   ),
                 ),
-                PopupMenuItem(
-                  value: 'remove',
-                  child: Row(
-                    children: [
-                      Icon(Icons.delete_outline, size: 18, color: Colors.red),
-                      SizedBox(width: 10),
-                      Text('Remove', style: TextStyle(color: Colors.red)),
-                    ],
+                // Only the record's creator or an admin can delete it.
+                if (AuthSession.canDelete((row['user_id'] ?? '').toString()))
+                  const PopupMenuItem(
+                    value: 'remove',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                        SizedBox(width: 10),
+                        Text('Remove', style: TextStyle(color: Colors.red)),
+                      ],
+                    ),
                   ),
-                ),
               ],
             ),
           ),
@@ -288,7 +291,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         Text(
           label,
           style: const TextStyle(
-            fontSize: 12,
+            fontSize: 11,
             color: Color(0xFF777A90),
             fontWeight: FontWeight.w600,
           ),
@@ -300,7 +303,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
           overflow: TextOverflow.ellipsis,
           style: valueStyle ??
               const TextStyle(
-                fontSize: 18,
+                fontSize: 13,
                 height: 1.2,
                 fontWeight: FontWeight.w700,
                 color: Color(0xFF25273B),
@@ -317,7 +320,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         const Text(
           'Date',
           style: TextStyle(
-            fontSize: 12,
+            fontSize: 11,
             color: Color(0xFF777A90),
             fontWeight: FontWeight.w600,
           ),
@@ -327,14 +330,14 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
           children: [
             const Icon(
               Icons.calendar_today_rounded,
-              size: 14,
+              size: 13,
               color: Color(0xFF9B9DAE),
             ),
             const SizedBox(width: 6),
             Text(
               _formatDate(date),
               style: const TextStyle(
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: FontWeight.w600,
                 color: Color(0xFF666A80),
                 height: 1,
@@ -353,7 +356,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         const Text(
           'Trees Survived',
           style: TextStyle(
-            fontSize: 12,
+            fontSize: 11,
             color: Color(0xFF777A90),
             fontWeight: FontWeight.w600,
           ),
@@ -362,7 +365,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
         Text(
           '$treesSurvived',
           style: const TextStyle(
-            fontSize: 33,
+            fontSize: 16,
             height: 1,
             fontWeight: FontWeight.w700,
             color: Color(0xFF22232F),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data_entry/seedling_request_form.dart';
+import '../service/auth_session.dart';
 import '../widget/add_seedling_request_detail_dialog.dart';
 import '../widget/side_panel.dart';
 
@@ -16,6 +17,7 @@ class _SeedlingRequestItem {
   final String nursery;
   final String? releaseBy;
   final String? releaseTo;
+  final int? userId;
 
   const _SeedlingRequestItem({
     required this.transactionId,
@@ -28,6 +30,7 @@ class _SeedlingRequestItem {
     required this.nursery,
     required this.releaseBy,
     required this.releaseTo,
+    required this.userId,
   });
 }
 
@@ -48,6 +51,10 @@ class _SeedlingRequestGroup {
 
   int get totalQuantity =>
       items.fold<int>(0, (sum, item) => sum + item.quantity);
+
+  // All items in a group come from the same request submission, so they
+  // share the same creator.
+  int? get userId => items.isEmpty ? null : items.first.userId;
 }
 
 class SeedlingRequestPage extends StatefulWidget {
@@ -257,10 +264,12 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
                   value: 'edit',
                   child: Text('Edit'),
                 ),
-                const PopupMenuItem<String>(
-                  value: 'remove',
-                  child: Text('Remove'),
-                ),
+                // Only the request's creator or an admin can delete it.
+                if (AuthSession.canDeleteBySeqId(group.userId))
+                  const PopupMenuItem<String>(
+                    value: 'remove',
+                    child: Text('Remove'),
+                  ),
               ],
             ),
           ],
@@ -569,7 +578,7 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
       var query = supabase
           .from('seedling_transaction')
           .select(
-              'id, transaction_id, seed_id, nursery_id, seedling_count, release_by, release_to, created_at, transaction_type_id');
+              'id, transaction_id, seed_id, nursery_id, seedling_count, release_by, release_to, created_at, transaction_type_id, user_id');
 
       if (releaseTypeId != null) {
         query = query.eq('transaction_type_id', releaseTypeId);
@@ -644,6 +653,7 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
           nursery: nurseryNameById[nurseryId] ?? 'Unspecified',
           releaseBy: (row['release_by'] ?? '').toString(),
           releaseTo: (row['release_to'] ?? '').toString(),
+          userId: (row['user_id'] as num?)?.toInt(),
         );
       }).toList();
 

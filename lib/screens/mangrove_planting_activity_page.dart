@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data_entry/mangrove_planting_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
+import '../service/auth_session.dart';
 import '../widget/activity_photos_dialog.dart';
 import '../widget/side_panel.dart';
 import 'mangrove_planting_edit_page.dart';
@@ -82,7 +83,7 @@ class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityP
                   Text(
                     'Recent Activity',
                     style: TextStyle(
-                      fontSize: 32,
+                      fontSize: 22,
                       fontWeight: FontWeight.w800,
                       color: Color(0xFF23253B),
                     ),
@@ -241,19 +242,21 @@ class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityP
                     _deleteActivity(item.planting);
                   }
                 },
-                itemBuilder: (context) => const [
-                  PopupMenuItem<_ActivityCardMenuAction>(
+                itemBuilder: (context) => [
+                  const PopupMenuItem<_ActivityCardMenuAction>(
                     value: _ActivityCardMenuAction.photos,
                     child: Text('Photos'),
                   ),
-                  PopupMenuItem<_ActivityCardMenuAction>(
+                  const PopupMenuItem<_ActivityCardMenuAction>(
                     value: _ActivityCardMenuAction.edit,
                     child: Text('Edit'),
                   ),
-                  PopupMenuItem<_ActivityCardMenuAction>(
-                    value: _ActivityCardMenuAction.delete,
-                    child: Text('Delete'),
-                  ),
+                  // Only the record's creator or an admin can delete it.
+                  if (AuthSession.canDelete(item.planting.userid))
+                    const PopupMenuItem<_ActivityCardMenuAction>(
+                      value: _ActivityCardMenuAction.delete,
+                      child: Text('Delete'),
+                    ),
                 ],
               ),
             ],

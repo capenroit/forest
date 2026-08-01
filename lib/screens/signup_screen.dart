@@ -122,13 +122,20 @@ class _SignupScreenState extends State<SignupScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // Create user in Supabase Auth
+      // Create user in Supabase Auth. division_type_id travels as signup
+      // metadata (not a follow-up update()) because handle_new_user() reads
+      // it straight from raw_user_meta_data when it creates the profile row
+      // — that trigger runs regardless of session state, unlike a
+      // client-side update() which needs an active session (not available
+      // until the user confirms their email) for the "own row" RLS policy
+      // to allow it.
       final AuthResponse res = await Supabase.instance.client.auth.signUp(
         email: email,
         password: password,
         emailRedirectTo: AppConfig.getEmailRedirectUrl(),
         data: {
           'full_name': name,
+          'division_type_id': _divisionOptions[_selectedDivision],
         },
       );
 
@@ -136,21 +143,35 @@ class _SignupScreenState extends State<SignupScreen> {
         throw Exception('Failed to create user account');
       }
 
-      // The user profile is automatically created by a database trigger.
-      // Update the division_type_id now that the user (and its trigger-made
-      // profile row) exists.
-      await Supabase.instance.client
-          .from('users')
-          .update({'division_type_id': _divisionOptions[_selectedDivision]})
-          .eq('id', res.user!.id);
+      // Belt-and-suspenders: set division_type_id directly via a
+      // SECURITY DEFINER RPC, which bypasses RLS and so doesn't depend on
+      // an active session (not available until email confirmation) or on
+      // handle_new_user() picking it up from signup metadata.
+      try {
+        await Supabase.instance.client.rpc(
+          'set_signup_division_type',
+          params: {
+            'target_user_id': res.user!.id,
+            'division_id': _divisionOptions[_selectedDivision],
+          },
+        );
+      } catch (e) {
+        debugPrint('set_signup_division_type RPC failed: $e');
+      }
 
       if (!mounted) return;
 
+      final needsEmailConfirmation = res.session == null;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('✓ Account created successfully!'),
+          content: Text(
+            needsEmailConfirmation
+                ? 'Account created. Check your email to confirm it, then wait for an admin to activate your account before signing in.'
+                : '✓ Account created successfully! An admin must activate your account before you can sign in.',
+          ),
           backgroundColor: Colors.green,
-          duration: const Duration(seconds: 3),
+          duration: const Duration(seconds: 5),
         ),
       );
 

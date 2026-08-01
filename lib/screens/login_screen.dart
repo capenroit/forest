@@ -92,7 +92,8 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     await _loadCachedUserData();
-    return AuthSession.currentUser?.status == 'Active';
+    return AuthSession.currentUser?.status == 'Active' &&
+        AuthSession.currentUser?.divisionTypeId != 3;
   }
 
   Future<AppUser> _loadUserProfile(String userId, String email) async {
@@ -197,6 +198,25 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
             backgroundColor: Colors.red,
             duration: const Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+
+      if (profile.divisionTypeId == 3) {
+        await Supabase.instance.client.auth.signOut();
+
+        if (!mounted) {
+          return;
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This account is not permitted to sign in. Please contact support.',
+            ),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
           ),
         );
         return;

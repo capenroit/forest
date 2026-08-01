@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data_entry/seed_for_forest_models.dart';
 import '../data_entry/seed_for_forest_form.dart';
+import '../service/auth_session.dart';
 import '../service/seedling_list_service.dart';
 import '../widget/side_panel.dart';
 
@@ -58,7 +59,7 @@ class _SeedForForestRecentActivityPageState
               child: Text(
                 'Recent Activity',
                 style: TextStyle(
-                  fontSize: 32,
+                  fontSize: 22,
                   fontWeight: FontWeight.w800,
                   color: Color(0xFF23253B),
                 ),
@@ -193,24 +194,12 @@ class _SeedForForestRecentActivityPageState
 
     final detailRows = await _supabase
         .from('seed_donation_data')
-        .select('seed_id, seed_count, species_type')
+        .select('seed_id, seed_count, species_type, is_mangrove')
         .eq('seed_donation_id', donationId);
 
-    final seedOptions = await _seedlingListService.getSeedlingOptions();
-    final seedNameById = {
-      for (final option in seedOptions) option.id: option.name,
-    };
-
-    final seedDetails = (detailRows as List<dynamic>).map((row) {
-      final data = Map<String, dynamic>.from(row as Map);
-      final seedId = (data['seed_id'] as num?)?.toInt() ?? 0;
-      return SeedDetail(
-        seedId: seedId,
-        speciesType: (data['species_type'] ?? '').toString(),
-        speciesName: seedNameById[seedId] ?? 'Seed $seedId',
-        speciesCount: (data['seed_count'] as num?)?.toInt() ?? 0,
-      );
-    }).toList();
+    final seedDetails = await _resolveSeedDetails(
+      (detailRows as List<dynamic>).cast<Map<String, dynamic>>(),
+    );
 
     final donatedDateRaw = (headerRow['donated_date'] ?? '').toString();
     final donatedDate = DateTime.tryParse(donatedDateRaw) ?? DateTime.now();
@@ -236,27 +225,74 @@ class _SeedForForestRecentActivityPageState
     try {
       final detailRows = await _supabase
           .from('seed_donation_data')
-          .select('seed_id, seed_count, species_type')
+          .select('seed_id, seed_count, species_type, is_mangrove')
           .eq('seed_donation_id', donationId);
 
-      final seedOptions = await _seedlingListService.getSeedlingOptions();
-      final seedNameById = {
-        for (final option in seedOptions) option.id: option.name,
-      };
-
-      return (detailRows as List<dynamic>).map((row) {
-        final data = Map<String, dynamic>.from(row as Map);
-        final seedId = (data['seed_id'] as num?)?.toInt() ?? 0;
-        return SeedDetail(
-          seedId: seedId,
-          speciesType: (data['species_type'] ?? '').toString(),
-          speciesName: seedNameById[seedId] ?? 'Seed $seedId',
-          speciesCount: (data['seed_count'] as num?)?.toInt() ?? 0,
-        );
-      }).toList();
+      return await _resolveSeedDetails(
+        (detailRows as List<dynamic>).cast<Map<String, dynamic>>(),
+      );
     } catch (_) {
       return const [];
     }
+  }
+
+  /// Resolves seed_donation_data rows to display-ready SeedDetail objects.
+  /// seed_id points into seedling_list normally, but into mangrove_list for
+  /// rows flagged is_mangrove (saved by the mangrove propagation form) —
+  /// the two id spaces aren't related, so each group is looked up against
+  /// its own table.
+  Future<List<SeedDetail>> _resolveSeedDetails(
+    List<Map<String, dynamic>> rows,
+  ) async {
+    final regularSeedIds = <int>{};
+    final mangroveSeedIds = <int>{};
+    for (final row in rows) {
+      final seedId = (row['seed_id'] as num?)?.toInt();
+      if (seedId == null) continue;
+      if (row['is_mangrove'] == true) {
+        mangroveSeedIds.add(seedId);
+      } else {
+        regularSeedIds.add(seedId);
+      }
+    }
+
+    final Map<int, String> seedNameById = {};
+    if (regularSeedIds.isNotEmpty) {
+      final seedOptions = await _seedlingListService.getSeedlingOptions();
+      for (final option in seedOptions) {
+        seedNameById[option.id] = option.name;
+      }
+    }
+
+    final Map<int, String> mangroveNameById = {};
+    if (mangroveSeedIds.isNotEmpty) {
+      final mangroveRows = await _supabase
+          .from('mangrove_list')
+          .select('id, name')
+          .inFilter('id', mangroveSeedIds.toList());
+
+      for (final row
+          in (mangroveRows as List<dynamic>).cast<Map<String, dynamic>>()) {
+        final id = (row['id'] as num?)?.toInt();
+        final name = (row['name'] ?? '').toString();
+        if (id != null) {
+          mangroveNameById[id] = name;
+        }
+      }
+    }
+
+    return rows.map((row) {
+      final seedId = (row['seed_id'] as num?)?.toInt() ?? 0;
+      final isMangrove = row['is_mangrove'] == true;
+      final resolvedName =
+          isMangrove ? mangroveNameById[seedId] : seedNameById[seedId];
+      return SeedDetail(
+        seedId: seedId,
+        speciesType: (row['species_type'] ?? '').toString(),
+        speciesName: resolvedName ?? 'Seed $seedId',
+        speciesCount: (row['seed_count'] as num?)?.toInt() ?? 0,
+      );
+    }).toList();
   }
 
   Future<void> _changeStatus(SeedForForestEntry activity) async {
@@ -706,7 +742,7 @@ class _SeedForForestRecentActivityPageState
     final response = await _supabase
         .from('seed_donation')
         .select(
-          'id, donor_name, donated_date, total_count, details, created_at, status, is_converted, survive',
+          'id, user_id, donor_name, donated_date, total_count, details, created_at, status, is_converted, survive',
         )
         .order('donated_date', ascending: false)
         .order('created_at', ascending: false)
@@ -721,6 +757,9 @@ class _SeedForForestRecentActivityPageState
 
           return SeedForForestEntry(
             id: (data['id'] as num?)?.toInt(),
+            userId: (data['user_id'] ?? '').toString().isEmpty
+                ? null
+                : data['user_id'].toString(),
             donorName: (data['donor_name'] ?? '').toString(),
             seedDetails: const [],
             date: donatedDate,
@@ -830,9 +869,12 @@ class _RecentActivityCard extends StatelessWidget {
                           onRemove();
                         }
                       },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        PopupMenuItem(value: 'remove', child: Text('Remove')),
+                      itemBuilder: (context) => [
+                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        // Only the record's creator or an admin can delete it.
+                        if (AuthSession.canDelete(activity.userId))
+                          const PopupMenuItem(
+                              value: 'remove', child: Text('Remove')),
                       ],
                       icon: Icon(
                         Icons.more_vert,

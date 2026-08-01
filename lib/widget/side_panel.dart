@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../screens/capiz_flora_fauna_recent_activity_page.dart';
 import '../screens/habitat_assessment_page.dart';
 import '../screens/login_screen.dart';
+import '../screens/manage_members_page.dart';
 import '../screens/mangrove_planting_activity_page.dart';
 import '../screens/mangrove_survival_monitoring_page.dart';
 import '../screens/marine_protected_area_page.dart';
@@ -178,6 +179,14 @@ class _SidePanelState extends State<SidePanel> {
                 children: menuChildren,
               ),
             ),
+            if (user?.accessLevel == 1 || user?.accessLevel == 2)
+              _buildNavItem(Icons.manage_accounts_rounded, "Members", () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ManageMembersPage()),
+                );
+              }),
             _buildNavItem(Icons.settings, "Settings", () {
               Navigator.pop(context);
               Navigator.push(

@@ -3,6 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'seed_for_forest_models.dart';
 import '../widget/add_seed_list_dialog.dart';
+import '../service/auth_session.dart';
+import '../service/lookup_service.dart';
 import '../service/seedling_list_service.dart';
 
 class SeedForForestForm extends StatefulWidget {
@@ -11,11 +13,35 @@ class SeedForForestForm extends StatefulWidget {
     required this.onSave,
     required this.onCancel,
     this.initialData,
+    this.donorFieldLabel = 'Donor Name',
+    this.showNurseryField = false,
+    this.formTitle = 'Seed for a Forest Data Entry',
+    this.formSubtitle = 'Record donor and seed list details',
+    this.useMangroveSpeciesList = false,
   });
 
   final ValueChanged<SeedForForestEntry> onSave;
   final VoidCallback onCancel;
   final SeedForForestEntry? initialData;
+
+  /// Label for the donor/propagator name field — lets callers repurpose this
+  /// form (e.g. "Propagated By" for a direct propagation quick-add) without
+  /// changing what's recorded for the existing "Seed for a Forest" flow.
+  final String donorFieldLabel;
+
+  /// When true, shows a required nursery dropdown and saves the selection
+  /// to seed_donation.nursery_id.
+  final bool showNurseryField;
+
+  /// Header title/subtitle — overridable so callers can repurpose this form
+  /// (e.g. "Mangrove Data Entry") without changing the default used by the
+  /// "Seed for a Forest" flow.
+  final String formTitle;
+  final String formSubtitle;
+
+  /// When true, "Add Seed List" pulls species from mangrove_list instead of
+  /// seedling_list.
+  final bool useMangroveSpeciesList;
 
   @override
   State<SeedForForestForm> createState() => _SeedForForestFormState();
@@ -32,6 +58,10 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
   DateTime _date = DateTime.now();
   bool _isSaving = false;
 
+  List<LookupOption> _nurseryOptions = [];
+  LookupOption? _selectedNursery;
+  bool _isLoadingNurseries = false;
+
   @override
   void initState() {
     super.initState();
@@ -45,6 +75,56 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
       _seedDetails.addAll(initial.seedDetails);
     }
     _date = initial?.date ?? DateTime.now();
+
+    if (widget.showNurseryField) {
+      _loadNurseryOptions();
+    }
+  }
+
+  Future<void> _loadNurseryOptions() async {
+    setState(() => _isLoadingNurseries = true);
+    try {
+      // This dropdown only applies to the division-2 (CRM) propagation
+      // quick-add flow, so only that division's nurseries are offered.
+      final rows = await _supabase
+          .from('seedling_nursery')
+          .select('seq_id, name')
+          .eq('div_type', 2);
+
+      final options = (rows as List<dynamic>)
+          .map((row) => LookupOption(
+                id: (row['seq_id'] as num).toInt(),
+                name: (row['name'] as String).trim(),
+              ))
+          .toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+      if (!mounted) return;
+      setState(() => _nurseryOptions = options);
+    } catch (_) {
+      // Dropdown just stays empty; save-time validation catches it.
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingNurseries = false);
+      }
+    }
+  }
+
+  Future<List<LookupOption>> _getMangroveSpeciesOptions() async {
+    try {
+      final rows =
+          await _supabase.from('mangrove_list').select('id, name').order('name');
+
+      return (rows as List<dynamic>)
+          .map((row) => LookupOption(
+                id: (row['id'] as num).toInt(),
+                name: (row['name'] as String).trim(),
+              ))
+          .where((option) => option.name.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return const <LookupOption>[];
+    }
   }
 
   @override
@@ -128,21 +208,21 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
                 children: [
                   const Icon(Icons.forest, color: Colors.white, size: 24),
                   const SizedBox(width: 12),
-                  const Expanded(
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Seed for a Forest Data Entry',
-                          style: TextStyle(
+                          widget.formTitle,
+                          style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.w700,
                             fontSize: 16,
                           ),
                         ),
                         Text(
-                          'Record donor and seed list details',
-                          style: TextStyle(
+                          widget.formSubtitle,
+                          style: const TextStyle(
                             fontSize: 11,
                             color: Colors.white70,
                           ),
@@ -164,7 +244,12 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildSectionHeader('Donor Details', Icons.person_outline_rounded),
+                    _buildSectionHeader(
+                      widget.showNurseryField
+                          ? 'Propagation Details'
+                          : 'Donor Details',
+                      Icons.person_outline_rounded,
+                    ),
                     const SizedBox(height: 10),
                     Container(
                       padding: const EdgeInsets.all(12),
@@ -178,13 +263,38 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
                           TextFormField(
                             controller: _donorNameController,
                             decoration: _modernInputDecoration(
-                              label: 'Donor Name',
-                              hint: 'Enter donor name',
+                              label: widget.donorFieldLabel,
+                              hint: 'Enter ${widget.donorFieldLabel.toLowerCase()}',
                               icon: Icons.badge_outlined,
                             ),
                             validator: (v) =>
                                 v == null || v.trim().isEmpty ? 'Required' : null,
                           ),
+                          if (widget.showNurseryField) ...[
+                            const SizedBox(height: 10),
+                            DropdownButtonFormField<LookupOption>(
+                              initialValue: _selectedNursery,
+                              decoration: _modernInputDecoration(
+                                label: 'Nursery',
+                                hint: _isLoadingNurseries
+                                    ? 'Loading nurseries...'
+                                    : 'Select nursery',
+                                icon: Icons.park_outlined,
+                              ),
+                              items: _nurseryOptions
+                                  .map((option) => DropdownMenuItem(
+                                        value: option,
+                                        child: Text(option.name),
+                                      ))
+                                  .toList(),
+                              onChanged: _isLoadingNurseries
+                                  ? null
+                                  : (value) =>
+                                      setState(() => _selectedNursery = value),
+                              validator: (v) =>
+                                  v == null ? 'Required' : null,
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -431,7 +541,9 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
   }
 
   Future<void> _openAddSeedListDialog() async {
-    final seedInventory = await _seedlingListService.getSeedlingOptions();
+    final seedInventory = widget.useMangroveSpeciesList
+        ? await _getMangroveSpeciesOptions()
+        : await _seedlingListService.getSeedlingOptions();
     if (!mounted) return;
     await showDialog<void>(
       context: context,
@@ -476,10 +588,15 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
       );
       final headerPayload = <String, dynamic>{
         'user_id': authUserId,
+        'userid': AuthSession.currentUser?.seqId,
         'donor_name': _donorNameController.text.trim(),
         'donated_date': _formatDateOnly(_date),
         'total_count': totalCount,
         'details': _remarksController.text.trim(),
+        if (widget.showNurseryField) ...{
+          'nursery_id': _selectedNursery!.id,
+          'status': 'PROPAGATED',
+        },
       };
 
       final initial = widget.initialData;
@@ -510,6 +627,10 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
           'seed_count': detail.speciesCount,
           'seed_donation_id': seedDonationId,
           'species_type': detail.speciesType,
+          // seed_id here points into mangrove_list, not seedling_list, when
+          // this form was opened in mangrove mode — flag it so downstream
+          // readers know which lookup table to resolve the name against.
+          'is_mangrove': widget.useMangroveSpeciesList,
         };
       }).toList();
 

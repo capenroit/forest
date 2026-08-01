@@ -55,5 +55,28 @@ class AppUser {
 
 class AuthSession {
   static AppUser? currentUser;
+
+  static bool get isAdmin {
+    final level = currentUser?.accessLevel;
+    return level == 1 || level == 2;
+  }
+
+  /// Whether the current user may delete a record created by [creatorId]
+  /// (a uuid matching AppUser.id) — the record's owner, or an admin.
+  /// Records with no known creator (legacy rows, or a null/empty id) are
+  /// admin-only, since ownership can't be established for them.
+  static bool canDelete(String? creatorId) {
+    if (isAdmin) return true;
+    if (creatorId == null || creatorId.isEmpty) return false;
+    return currentUser?.id == creatorId;
+  }
+
+  /// Same as [canDelete], for tables that track the creator via
+  /// users.seq_id (an int) instead of the uuid id.
+  static bool canDeleteBySeqId(int? creatorSeqId) {
+    if (isAdmin) return true;
+    if (creatorSeqId == null) return false;
+    return currentUser?.seqId == creatorSeqId;
+  }
 }
 
