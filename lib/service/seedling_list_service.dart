@@ -51,7 +51,8 @@ class SeedlingListService {
     try {
       final response = await supabase
           .from('seedling_list')
-          .select('seedling_name');
+          .select('seedling_name')
+          .timeout(const Duration(seconds: 6));
 
       final data = response as List<dynamic>;
       final seen = <String>{};

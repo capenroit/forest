@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -13,6 +14,7 @@ import 'api_service.dart';
 class OfflineSyncService {
   static const String _queueFileName = 'offline_queue.json';
   static const String _activitiesCacheFileName = 'activities_cache.json';
+  static const String _seedRowsCacheFileName = 'seed_rows_cache.json';
   static const String _photosDirName = 'offline_photos';
   static const String _storageBucketName = 'Forest Management';
   static const int _treeGrowingActivityTypeId = 1;
@@ -46,6 +48,30 @@ class OfflineSyncService {
     }
   }
 
+  /// Whether [error] looks like a connectivity failure (no network, DNS
+  /// lookup failure, timed-out socket) rather than a real server/data error.
+  static bool isNetworkError(Object error) {
+    if (error is SocketException || error is TimeoutException) return true;
+    final text = error.toString();
+    return text.contains('SocketException') ||
+        text.contains('Failed host lookup') ||
+        text.contains('Connection failed') ||
+        text.contains('Connection reset') ||
+        text.contains('Connection refused') ||
+        text.contains('Network is unreachable');
+  }
+
+  /// Turns a caught error into a message safe to show end users, replacing
+  /// raw connectivity exceptions (which read as gibberish, e.g.
+  /// "ClientException with SocketException: Failed host lookup...") with a
+  /// plain explanation.
+  static String friendlyErrorMessage(Object error) {
+    if (isNetworkError(error)) {
+      return "You're offline. Connect to the internet and try again.";
+    }
+    return 'Something went wrong: $error';
+  }
+
   // ─── Paths ───────────────────────────────────────────────────────────────
 
   static Future<File> _queueFile() async {
@@ -56,6 +82,11 @@ class OfflineSyncService {
   static Future<File> _activitiesCacheFile() async {
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}/$_activitiesCacheFileName');
+  }
+
+  static Future<File> _seedRowsCacheFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/$_seedRowsCacheFileName');
   }
 
   static Future<Directory> _photosDir() async {
@@ -135,36 +166,7 @@ class OfflineSyncService {
     required int divisionTypeId,
   }) async {
     final queue = await _loadQueue();
-    final photosDir = await _photosDir();
-
-    // Copy any temporary photos to stable offline storage before queuing.
-    final stableCoords = <Map<String, dynamic>>[];
-    for (final coord in coordinates) {
-      final tempPath = coord['photoPath'] as String?;
-      String? stablePath;
-
-      if (tempPath != null && tempPath.isNotEmpty) {
-        try {
-          final src = File(tempPath);
-          if (await src.exists()) {
-            final ext = _extensionOf(tempPath);
-            final fileName =
-                'photo_${DateTime.now().millisecondsSinceEpoch}_${_rand()}.$ext';
-            final dst = File('${photosDir.path}/$fileName');
-            await src.copy(dst.path);
-            stablePath = dst.path;
-          }
-        } catch (_) {
-          // If copy fails we skip the photo but keep the coordinate.
-        }
-      }
-
-      stableCoords.add({
-        'lat': coord['lat'],
-        'lng': coord['lng'],
-        if (stablePath != null) 'stablePhotoPath': stablePath,
-      });
-    }
+    final stableCoords = await _stageCoordinatePhotos(coordinates);
 
     queue.add({
       'localId': '${DateTime.now().millisecondsSinceEpoch}_${_rand()}',
@@ -177,6 +179,79 @@ class OfflineSyncService {
     });
 
     await _saveQueue(queue);
+  }
+
+  /// Rewrites a still-queued tree-growing/mangrove-planting item's payload
+  /// in place — used when the user edits a record they saved offline
+  /// (legacy 'planting' queue shape) before it has synced. Mirrors
+  /// [updatePendingItem], which does the same for the generic queue shape.
+  static Future<void> updatePendingPlantingItem({
+    required String localId,
+    required TreePlanting planting,
+    required List<Map<String, dynamic>> seedRows,
+    required List<Map<String, dynamic>> coordinates,
+    required int divisionTypeId,
+  }) async {
+    final queue = await _loadQueue();
+    final index = queue.indexWhere((item) => item['localId'] == localId);
+    if (index == -1) return;
+
+    final stableCoords = await _stageCoordinatePhotos(coordinates);
+
+    queue[index] = {
+      ...queue[index],
+      'planting': planting.toJson(),
+      'seedRows': seedRows,
+      'coordinates': stableCoords,
+      'divisionTypeId': divisionTypeId,
+      'queuedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    await _saveQueue(queue);
+  }
+
+  /// Copies each coordinate's temporary camera photo into stable offline
+  /// storage, returning coordinates with `stablePhotoPath` instead of
+  /// `photoPath`. A `photoPath` that already points inside the stable
+  /// photos directory (e.g. re-saving a pending draft without retaking that
+  /// point's photo) is reused as-is rather than copied again.
+  static Future<List<Map<String, dynamic>>> _stageCoordinatePhotos(
+      List<Map<String, dynamic>> coordinates) async {
+    final photosDir = await _photosDir();
+    final stableCoords = <Map<String, dynamic>>[];
+
+    for (final coord in coordinates) {
+      final photoPath = coord['photoPath'] as String?;
+      String? stablePath;
+
+      if (photoPath != null && photoPath.isNotEmpty) {
+        if (photoPath.startsWith(photosDir.path)) {
+          stablePath = photoPath;
+        } else {
+          try {
+            final src = File(photoPath);
+            if (await src.exists()) {
+              final ext = _extensionOf(photoPath);
+              final fileName =
+                  'photo_${DateTime.now().millisecondsSinceEpoch}_${_rand()}.$ext';
+              final dst = File('${photosDir.path}/$fileName');
+              await src.copy(dst.path);
+              stablePath = dst.path;
+            }
+          } catch (_) {
+            // If copy fails we skip the photo but keep the coordinate.
+          }
+        }
+      }
+
+      stableCoords.add({
+        'lat': coord['lat'],
+        'lng': coord['lng'],
+        if (stablePath != null) 'stablePhotoPath': stablePath,
+      });
+    }
+
+    return stableCoords;
   }
 
   // ─── Public API — generic typed queue (the 6 newer forms) ────────────────
@@ -294,6 +369,53 @@ class OfflineSyncService {
           .cast<Map<String, dynamic>>()
           .map((row) => TreePlanting.fromJson(row))
           .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  // ─── Public API — cached seedling rows for the survival-monitoring forms ─
+  //
+  // Write-through cache of tree_growing_data rows (species + planted count)
+  // per activity, so a survival-monitoring form can still list the species
+  // to record survival against for a previously-viewed activity while
+  // offline, instead of blocking the whole entry.
+
+  static Future<void> cacheSeedRows(
+      int treeGrowingId, List<Map<String, dynamic>> rows) async {
+    try {
+      final file = await _seedRowsCacheFile();
+      Map<String, dynamic> cache = {};
+
+      if (await file.exists()) {
+        try {
+          final decoded = jsonDecode(await file.readAsString());
+          if (decoded is Map<String, dynamic>) cache = decoded;
+        } catch (_) {
+          // Corrupted cache — overwrite it below.
+        }
+      }
+
+      cache[treeGrowingId.toString()] = rows;
+      await file.writeAsString(jsonEncode(cache));
+    } catch (_) {
+      // Best effort — the form just falls back to an empty list.
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> getCachedSeedRows(
+      int treeGrowingId) async {
+    try {
+      final file = await _seedRowsCacheFile();
+      if (!await file.exists()) return [];
+
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is! Map<String, dynamic>) return [];
+
+      final rows = decoded[treeGrowingId.toString()];
+      if (rows is! List) return [];
+
+      return rows.cast<Map<String, dynamic>>();
     } catch (_) {
       return [];
     }

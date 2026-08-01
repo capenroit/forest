@@ -32,6 +32,8 @@ class LookupService {
   static List<LookupOption> _cachedMunicipalityOptions = [];
   static bool _municipalityOptionsLoaded = false;
   static final Map<int, List<LookupOption>> _cachedBarangayOptionsByMunicipality = {};
+  static List<LookupOption> _cachedFloraClassificationOptions = [];
+  static List<LookupOption> _cachedFaunaClassificationOptions = [];
   static bool _diskCacheLoaded = false;
 
   static void _sortMunicipalityOptionsWithIdOneFirst() {
@@ -91,6 +93,26 @@ class LookupService {
                 .toList();
           });
         }
+
+        final floraClassifications = decoded['flora_classifications'];
+        if (floraClassifications is List) {
+          _cachedFloraClassificationOptions = floraClassifications
+              .whereType<Map>()
+              .map((item) => LookupOption.fromJson(
+                    Map<String, dynamic>.from(item),
+                  ))
+              .toList();
+        }
+
+        final faunaClassifications = decoded['fauna_classifications'];
+        if (faunaClassifications is List) {
+          _cachedFaunaClassificationOptions = faunaClassifications
+              .whereType<Map>()
+              .map((item) => LookupOption.fromJson(
+                    Map<String, dynamic>.from(item),
+                  ))
+              .toList();
+        }
       }
     } catch (_) {
       // Ignore disk cache parsing errors and fall back to network or empty state.
@@ -113,6 +135,12 @@ class LookupService {
             options.map((option) => option.toJson()).toList(),
           ),
         ),
+        'flora_classifications': _cachedFloraClassificationOptions
+            .map((option) => option.toJson())
+            .toList(),
+        'fauna_classifications': _cachedFaunaClassificationOptions
+            .map((option) => option.toJson())
+            .toList(),
       };
       await file.writeAsString(jsonEncode(payload));
     } catch (_) {
@@ -240,13 +268,15 @@ class LookupService {
   }
 
   static Future<List<LookupOption>> getFloraClassificationOptions() async {
+    await _loadDiskCache();
+
     try {
       final response = await _supabase
           .from('flora_classification')
           .select('id, name')
           .order('name', ascending: true);
 
-      return (response as List<dynamic>)
+      _cachedFloraClassificationOptions = (response as List<dynamic>)
           .map(
             (row) => LookupOption(
               id: (row['id'] as num).toInt(),
@@ -255,19 +285,26 @@ class LookupService {
           )
           .where((option) => option.name.isNotEmpty)
           .toList();
+
+      await _persistDiskCache();
+      return _cachedFloraClassificationOptions;
     } catch (_) {
-      return const <LookupOption>[];
+      // Offline or Supabase unavailable: fall back to whatever was cached
+      // from the last successful fetch.
+      return _cachedFloraClassificationOptions;
     }
   }
 
   static Future<List<LookupOption>> getFaunaClassificationOptions() async {
+    await _loadDiskCache();
+
     try {
       final response = await _supabase
           .from('fauna_classification')
           .select('id, name')
           .order('name', ascending: true);
 
-      return (response as List<dynamic>)
+      _cachedFaunaClassificationOptions = (response as List<dynamic>)
           .map(
             (row) => LookupOption(
               id: (row['id'] as num).toInt(),
@@ -276,8 +313,13 @@ class LookupService {
           )
           .where((option) => option.name.isNotEmpty)
           .toList();
+
+      await _persistDiskCache();
+      return _cachedFaunaClassificationOptions;
     } catch (_) {
-      return const <LookupOption>[];
+      // Offline or Supabase unavailable: fall back to whatever was cached
+      // from the last successful fetch.
+      return _cachedFaunaClassificationOptions;
     }
   }
 
@@ -316,6 +358,8 @@ class LookupService {
     _cachedMunicipalityOptions = [];
     _municipalityOptionsLoaded = false;
     _cachedBarangayOptionsByMunicipality.clear();
+    _cachedFloraClassificationOptions = [];
+    _cachedFaunaClassificationOptions = [];
     _diskCacheLoaded = false;
 
     _cacheFile().then((file) {

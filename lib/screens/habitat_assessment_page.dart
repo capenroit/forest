@@ -32,6 +32,7 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
   final List<_HabitatActivityItem> _items = [];
   final List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
+  bool _isSyncing = false;
   String? _errorMessage;
 
   @override
@@ -54,6 +55,33 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
     } catch (_) {
       // Best effort — the pending section just stays empty on failure.
     }
+  }
+
+  Future<void> _syncNow() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    final synced = await OfflineSyncService.syncAll();
+
+    if (!mounted) return;
+    await Future.wait([
+      _loadRecentActivities(showLoader: false),
+      _loadPendingItems(),
+    ]);
+
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          synced > 0
+              ? 'Synced $synced record${synced == 1 ? '' : 's'}.'
+              : 'Unable to sync — check your internet connection.',
+        ),
+        backgroundColor: synced > 0 ? Colors.green : Colors.red,
+      ),
+    );
   }
 
   Future<void> _loadRecentActivities({bool showLoader = true}) async {
@@ -107,7 +135,7 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load records: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }
@@ -555,6 +583,28 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
               fontSize: 12,
               fontWeight: FontWeight.w700,
               color: Colors.orange.shade900,
+            ),
+          ),
+        ),
+        const Spacer(),
+        TextButton.icon(
+          onPressed: _isSyncing ? null : _syncNow,
+          icon: _isSyncing
+              ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.orange.shade800,
+                  ),
+                )
+              : Icon(Icons.sync_rounded, size: 16, color: Colors.orange.shade800),
+          label: Text(
+            _isSyncing ? 'Syncing…' : 'Sync Now',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Colors.orange.shade800,
             ),
           ),
         ),

@@ -4,6 +4,7 @@ import '../data_entry/tree_growing_form.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/activity_photos_dialog.dart';
 import '../widget/side_panel.dart';
 import 'tree_growing_edit_page.dart';
@@ -30,14 +31,67 @@ class _TreeGrowingActivityItem {
 enum _ActivityCardMenuAction { photos, edit, delete }
 
 class _TreeGrowingPageState extends State<TreeGrowingPage> {
+  static const int _treeGrowingProjectTypeId = 1;
+
   final List<_TreeGrowingActivityItem> _items = [];
+  final List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
+  bool _isSyncing = false;
   String? _errorMessage;
 
   @override
   void initState() {
     super.initState();
     _loadRecentActivities();
+    _loadPendingItems();
+  }
+
+  Future<void> _loadPendingItems() async {
+    try {
+      final items = await OfflineSyncService.getPendingItems(type: 'planting');
+      final filtered = items.where((item) {
+        final planting = item['planting'];
+        if (planting is! Map) return false;
+        final projectTypeId = (planting['project_type_id'] as num?)?.toInt();
+        return projectTypeId == _treeGrowingProjectTypeId;
+      }).toList();
+
+      if (!mounted) return;
+      setState(() {
+        _pendingItems
+          ..clear()
+          ..addAll(filtered);
+      });
+    } catch (_) {
+      // Best effort — the pending section just stays as it was.
+    }
+  }
+
+  Future<void> _syncNow() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    final synced = await OfflineSyncService.syncAll();
+
+    if (!mounted) return;
+    await Future.wait([
+      _loadRecentActivities(showLoader: false),
+      _loadPendingItems(),
+    ]);
+
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          synced > 0
+              ? 'Synced $synced record${synced == 1 ? '' : 's'}.'
+              : 'Unable to sync — check your internet connection.',
+        ),
+        backgroundColor: synced > 0 ? Colors.green : Colors.red,
+      ),
+    );
   }
 
   @override
@@ -73,7 +127,12 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
         ),
       ),
       body: RefreshIndicator(
-        onRefresh: () => _loadRecentActivities(showLoader: false),
+        onRefresh: () async {
+          await Future.wait([
+            _loadRecentActivities(showLoader: false),
+            _loadPendingItems(),
+          ]);
+        },
         child: Column(
           children: [
             Padding(
@@ -124,16 +183,34 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
   }
 
   Widget _buildBody(List<_TreeGrowingActivityItem> visibleItems) {
-    if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+    final children = <Widget>[];
+
+    if (_pendingItems.isNotEmpty) {
+      children.add(_buildPendingSectionHeader());
+      children.add(const SizedBox(height: 10));
+      for (final item in _pendingItems) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildPendingCard(item),
+          ),
+        );
+      }
+      children.add(const SizedBox(height: 6));
     }
 
-    if (_errorMessage != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+    if (_isLoading) {
+      children.add(
+        const Padding(
+          padding: EdgeInsets.only(top: 40),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    } else if (_errorMessage != null) {
+      children.add(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 _errorMessage!,
@@ -149,26 +226,190 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
           ),
         ),
       );
-    }
-
-    if (visibleItems.isEmpty) {
-      return const Center(
-        child: Text(
-          'No tree planting activities yet.',
-          style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
+    } else if (visibleItems.isEmpty) {
+      children.add(
+        const Padding(
+          padding: EdgeInsets.only(top: 40),
+          child: Center(
+            child: Text(
+              'No tree planting activities yet.',
+              style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
+            ),
+          ),
         ),
       );
+    } else {
+      for (final item in visibleItems) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _buildActivityCard(item),
+          ),
+        );
+      }
     }
 
-    return ListView.separated(
+    return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 6, 20, 88),
-      itemCount: visibleItems.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final item = visibleItems[index];
-        return _buildActivityCard(item);
-      },
+      children: children,
+    );
+  }
+
+  Widget _buildPendingSectionHeader() {
+    return Row(
+      children: [
+        Icon(Icons.cloud_off_rounded, size: 20, color: Colors.orange.shade800),
+        const SizedBox(width: 8),
+        Text(
+          'Pending Sync',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w800,
+            color: Colors.orange.shade800,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.orange.shade100,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '${_pendingItems.length}',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Colors.orange.shade900,
+            ),
+          ),
+        ),
+        const Spacer(),
+        TextButton.icon(
+          onPressed: _isSyncing ? null : _syncNow,
+          icon: _isSyncing
+              ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.orange.shade800,
+                  ),
+                )
+              : Icon(Icons.sync_rounded, size: 16, color: Colors.orange.shade800),
+          label: Text(
+            _isSyncing ? 'Syncing…' : 'Sync Now',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Colors.orange.shade800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPendingCard(Map<String, dynamic> item) {
+    final localId = item['localId'] as String?;
+    final planting = Map<String, dynamic>.from(
+        (item['planting'] as Map?) ?? const <String, dynamic>{});
+    final seedRows = ((item['seedRows'] as List?) ?? const [])
+        .map((r) => Map<String, dynamic>.from(r as Map))
+        .toList();
+
+    final activityName = (planting['activity_name'] as String?)?.trim();
+    final municipality = (planting['municipality'] as String?)?.trim();
+    final barangay = (planting['barangay'] as String?)?.trim();
+    final date = DateTime.tryParse(
+        (planting['planting_date'] as String?) ?? '');
+
+    final species = seedRows
+        .map((r) => (r['seed_name'] ?? '').toString().trim())
+        .where((name) => name.isNotEmpty)
+        .toSet()
+        .join(', ');
+    final treesCount = seedRows.fold<int>(0, (sum, r) {
+      final qty = (r['seedling_count'] as num?)?.toInt() ?? 0;
+      return sum + qty;
+    });
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: localId == null ? null : () => _editPendingActivity(localId, item),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.orange.shade200),
+        ),
+        child: Column(
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Activity Name',
+                    value: (activityName == null || activityName.isEmpty)
+                        ? 'N/A'
+                        : activityName,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Municipality',
+                    value: (municipality == null || municipality.isEmpty)
+                        ? 'N/A'
+                        : municipality,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Barangay',
+                    value: (barangay == null || barangay.isEmpty)
+                        ? 'N/A'
+                        : barangay,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: localId == null
+                      ? null
+                      : () => _deletePendingActivity(localId),
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    size: 20,
+                    color: Color(0xFFC62828),
+                  ),
+                  tooltip: 'Delete',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(child: _buildDate(date ?? DateTime.now())),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: _buildLabelValue(
+                    label: 'Species',
+                    value: species.isEmpty ? 'Unspecified' : species,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                _buildTreesCount(treesCount),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -426,7 +667,7 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load records: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }
@@ -453,11 +694,129 @@ class _TreeGrowingPageState extends State<TreeGrowingPage> {
           onSave: (_) {
             Navigator.pop(dialogContext);
             _loadRecentActivities(showLoader: false);
+            _loadPendingItems();
           },
           onCancel: () {
             Navigator.pop(dialogContext);
           },
         ),
+      ),
+    );
+  }
+
+  Future<void> _editPendingActivity(
+      String localId, Map<String, dynamic> item) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        insetPadding: const EdgeInsets.all(16),
+        child: TreeGrowingForm(
+          municipalities: const [],
+          barangays: const [],
+          pendingLocalId: localId,
+          pendingPayload: item,
+          onSave: (_) {
+            Navigator.pop(dialogContext);
+            _loadRecentActivities(showLoader: false);
+            _loadPendingItems();
+          },
+          onCancel: () {
+            Navigator.pop(dialogContext);
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deletePendingActivity(String localId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+          contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          actionsPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          title: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: Colors.red.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.delete_outline_rounded,
+                  size: 20,
+                  color: Color(0xFFC62828),
+                ),
+              ),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'Delete Pending Record?',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF22232F),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            'This offline draft has not been synced yet. It will be permanently removed.',
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.35,
+              color: Color(0xFF5E6175),
+            ),
+          ),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                side: const BorderSide(color: Color(0xFFD4D7E5)),
+              ),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(color: Color(0xFF4E526A), fontWeight: FontWeight.w600),
+              ),
+            ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFD32F2F),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                elevation: 0,
+              ),
+              icon: const Icon(Icons.delete_rounded, size: 18),
+              label: const Text('Delete', style: TextStyle(fontWeight: FontWeight.w700)),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    await OfflineSyncService.deletePendingItem(localId);
+    await _loadPendingItems();
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Pending record deleted.'),
+        backgroundColor: Colors.green,
       ),
     );
   }

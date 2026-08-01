@@ -58,9 +58,19 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       if (profileData != null) {
         final profile = AppUser.fromJson(profileData, id: userId);
         AuthSession.currentUser = profile;
+        await AuthSession.cacheUser(profile);
+        return;
       }
-    } catch (e) {
-      // Failed to load profile
+    } catch (_) {
+      // Offline or the request otherwise failed — fall through to the
+      // last cached profile below instead of leaving currentUser null.
+    }
+
+    final cached = await AuthSession.loadCachedUser();
+    if (cached != null && cached.id != userId) {
+      // Cached profile belongs to a different account than the restored
+      // session — don't show the wrong person's name.
+      AuthSession.currentUser = null;
     }
   }
 

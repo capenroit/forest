@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -20,7 +18,6 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   static const _cachedEmailKey = 'cached_login_email';
   static const _cachedPasswordKey = 'cached_login_password';
-  static const _cachedUserKey = 'cached_login_user';
 
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -50,36 +47,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     await prefs.remove(_cachedEmailKey);
     await prefs.remove(_cachedPasswordKey);
-    await prefs.remove(_cachedUserKey);
-  }
-
-  Future<void> _cacheUserData(AppUser user) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _cachedUserKey,
-      jsonEncode({
-        'id': user.id,
-        ...user.toJson(),
-      }),
-    );
-  }
-
-  Future<void> _loadCachedUserData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final cachedUserJson = prefs.getString(_cachedUserKey);
-
-    if (cachedUserJson == null || cachedUserJson.isEmpty) {
-      return;
-    }
-
-    final cachedUser = jsonDecode(cachedUserJson) as Map<String, dynamic>;
-    final cachedUserId = cachedUser['id'] as String?;
-
-    if (cachedUserId == null || cachedUserId.isEmpty) {
-      return;
-    }
-
-    AuthSession.currentUser = AppUser.fromJson(cachedUser, id: cachedUserId);
+    await AuthSession.clearCachedUser();
   }
 
   Future<bool> _tryOfflineLogin(String email, String password) async {
@@ -91,7 +59,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return false;
     }
 
-    await _loadCachedUserData();
+    await AuthSession.loadCachedUser();
     return AuthSession.currentUser?.status == 'Active' &&
         AuthSession.currentUser?.divisionTypeId != 3;
   }
@@ -223,7 +191,7 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       await _saveCredentials(email, password);
-      await _cacheUserData(profile);
+      await AuthSession.cacheUser(profile);
 
       if (!mounted) {
         return;

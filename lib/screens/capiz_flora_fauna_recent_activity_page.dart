@@ -20,6 +20,7 @@ class _CapizFloraFaunaRecentActivityPageState
   final List<FloraFaunaEntry> _recentActivities = [];
   List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
+  bool _isSyncing = false;
   String? _errorMessage;
 
   @override
@@ -46,6 +47,30 @@ class _CapizFloraFaunaRecentActivityPageState
     } catch (_) {
       // Best effort — the pending list just stays as it was.
     }
+  }
+
+  Future<void> _syncNow() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    final synced = await OfflineSyncService.syncAll();
+
+    if (!mounted) return;
+    await _loadAll(showLoader: false);
+
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          synced > 0
+              ? 'Synced $synced record${synced == 1 ? '' : 's'}.'
+              : 'Unable to sync — check your internet connection.',
+        ),
+        backgroundColor: synced > 0 ? Colors.green : Colors.red,
+      ),
+    );
   }
 
   Future<void> _loadRecentActivities({bool showLoader = true}) async {
@@ -102,7 +127,7 @@ class _CapizFloraFaunaRecentActivityPageState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load recent activity: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }
@@ -435,6 +460,28 @@ class _CapizFloraFaunaRecentActivityPageState
             color: Color(0xFFB25E00),
           ),
         ),
+        const Spacer(),
+        TextButton.icon(
+          onPressed: _isSyncing ? null : _syncNow,
+          icon: _isSyncing
+              ? const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFFB25E00),
+                  ),
+                )
+              : const Icon(Icons.sync_rounded, size: 16, color: Color(0xFFB25E00)),
+          label: Text(
+            _isSyncing ? 'Syncing…' : 'Sync Now',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFFB25E00),
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -492,7 +539,9 @@ class _CapizFloraFaunaRecentActivityPageState
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
-                : _errorMessage != null
+                : (_errorMessage != null &&
+                        _recentActivities.isEmpty &&
+                        _pendingItems.isEmpty)
                     ? Center(
                         child: Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -537,6 +586,18 @@ class _CapizFloraFaunaRecentActivityPageState
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                                 children: [
+                                  if (_errorMessage != null) ...[
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12),
+                                      child: Text(
+                                        _errorMessage!,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                            color: Color(0xFFB07C1F)),
+                                      ),
+                                    ),
+                                  ],
                                   if (_pendingItems.isNotEmpty) ...[
                                     _buildPendingSectionHeader(),
                                     const SizedBox(height: 10),

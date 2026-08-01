@@ -250,12 +250,25 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
       }
     }
 
+    List<Map<String, dynamic>> rows = const [];
+    bool fetchFailed = false;
     try {
       final grouped = await ApiService.getTreeGrowingDataByTreeGrowingIds([
         seqId,
       ]);
-      final rows = grouped[seqId] ?? const [];
+      rows = grouped[seqId] ?? const [];
+      // Write-through cache so this activity's species list is still
+      // available next time this device records survival for it offline.
+      await OfflineSyncService.cacheSeedRows(seqId, rows);
+    } catch (_) {
+      // No live connection (or the request otherwise failed). Fall back to
+      // whatever species list was cached the last time this activity's rows
+      // were fetched successfully.
+      rows = await OfflineSyncService.getCachedSeedRows(seqId);
+      fetchFailed = rows.isEmpty;
+    }
 
+    try {
       final nextRows = rows
           .map((row) {
             final seedId = (row['id'] as num?)?.toInt();
@@ -300,6 +313,7 @@ class _MonitoringTreeSurvivalFormState extends State<MonitoringTreeSurvivalForm>
         }
         _survivalRows = nextRows;
         _usedQuarters = usedQuarters;
+        _speciesLoadFailed = fetchFailed;
       });
     } catch (_) {
       // No live connection (or the request otherwise failed). Species rows

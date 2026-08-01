@@ -1590,12 +1590,24 @@ class ApiService {
 
   // ===== MANGROVE LIST ENDPOINTS =====
 
+  static List<String> _cachedMangroveSpeciesNames = [];
+
+  /// Returns the last successfully fetched mangrove species names without
+  /// a network request — lets a caller open a picker immediately with
+  /// whatever was already loaded this session instead of waiting on
+  /// [getMangroveSpeciesNames].
+  static List<String> getCachedMangroveSpeciesNames() =>
+      List.unmodifiable(_cachedMangroveSpeciesNames);
+
   /// Returns mangrove species names for the Mangrove Planting Activity
   /// Seedling Details dropdown.
   static Future<List<String>> getMangroveSpeciesNames() async {
     try {
-      final response =
-          await _client.from('mangrove_list').select('name').order('name');
+      final response = await _client
+          .from('mangrove_list')
+          .select('name')
+          .order('name')
+          .timeout(const Duration(seconds: 6));
 
       final seen = <String>{};
       final names = <String>[];
@@ -1608,9 +1620,12 @@ class ApiService {
         if (seen.add(key)) names.add(name);
       }
 
+      _cachedMangroveSpeciesNames = names;
       return names;
     } catch (e) {
-      return const <String>[];
+      // Offline, slow connection (timed out above), or otherwise failed —
+      // fall back to whatever was fetched earlier this session.
+      return _cachedMangroveSpeciesNames;
     }
   }
 

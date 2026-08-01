@@ -21,6 +21,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
   final List<Map<String, dynamic>> _items = [];
   final List<Map<String, dynamic>> _pendingItems = [];
   bool _isLoading = true;
+  bool _isSyncing = false;
   String? _errorMessage;
 
   @override
@@ -179,6 +180,28 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
             fontSize: 13,
             fontWeight: FontWeight.w800,
             color: Colors.orange.shade800,
+          ),
+        ),
+        const Spacer(),
+        TextButton.icon(
+          onPressed: _isSyncing ? null : _syncNow,
+          icon: _isSyncing
+              ? SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.orange.shade800,
+                  ),
+                )
+              : Icon(Icons.sync_rounded, size: 16, color: Colors.orange.shade800),
+          label: Text(
+            _isSyncing ? 'Syncing…' : 'Sync Now',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: Colors.orange.shade800,
+            ),
           ),
         ),
       ],
@@ -568,7 +591,7 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load records: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }
@@ -619,6 +642,30 @@ class _TreeSurvivalMonitoringPageState extends State<TreeSurvivalMonitoringPage>
     } catch (_) {
       // Best effort — leave whatever pending list we already had.
     }
+  }
+
+  Future<void> _syncNow() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    final synced = await OfflineSyncService.syncAll();
+
+    if (!mounted) return;
+    await _loadRecentActivities(showLoader: false);
+
+    if (!mounted) return;
+    setState(() => _isSyncing = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          synced > 0
+              ? 'Synced $synced record${synced == 1 ? '' : 's'}.'
+              : 'Unable to sync — check your internet connection.',
+        ),
+        backgroundColor: synced > 0 ? Colors.green : Colors.red,
+      ),
+    );
   }
 
   /// Each row is one species now (seed_id links to tree_growing_data), so a

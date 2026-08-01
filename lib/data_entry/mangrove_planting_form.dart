@@ -31,6 +31,13 @@ class MangrovePlantingForm extends StatefulWidget {
   final VoidCallback onCancel;
   final TreePlanting? initialData;
 
+  /// When set (together with [pendingPayload]), this form edits a still-
+  /// queued offline draft (the legacy 'planting' queue shape: keys
+  /// `planting`, `seedRows`, `coordinates`, `divisionTypeId`) instead of a
+  /// server record or a brand-new entry.
+  final String? pendingLocalId;
+  final Map<String, dynamic>? pendingPayload;
+
   const MangrovePlantingForm({
     Key? key,
     required this.municipalities,
@@ -38,6 +45,8 @@ class MangrovePlantingForm extends StatefulWidget {
     required this.onSave,
     required this.onCancel,
     this.initialData,
+    this.pendingLocalId,
+    this.pendingPayload,
   }) : super(key: key);
 
   @override
@@ -78,6 +87,16 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
   List<Map<String, dynamic>> capturedCoordinates = [];
   bool _didApplyInitialMunicipality = false;
 
+  /// Same shape as [widget.initialData], but also covers the pending-draft
+  /// case: a [TreePlanting] reconstructed from [widget.pendingPayload] for
+  /// pre-filling display fields (activity name, municipality, date, etc).
+  /// Unlike [widget.initialData], this must never be used to decide the
+  /// save path (that still needs a real null for a pending draft, so
+  /// `_handleSave` doesn't mistake it for an online edit).
+  TreePlanting? _prefillSource;
+
+  bool get _isEditingPending => widget.pendingLocalId != null;
+
   @override
   void initState() {
     super.initState();
@@ -92,7 +111,14 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
     _editLngController = TextEditingController();
     _dateController.text = DateTime.now().toIso8601String().split('T').first;
 
-    final initial = widget.initialData;
+    final pendingPayload = widget.pendingPayload;
+    _prefillSource = widget.initialData ??
+        (pendingPayload != null
+            ? TreePlanting.fromJson(
+                Map<String, dynamic>.from(pendingPayload['planting'] as Map))
+            : null);
+
+    final initial = _prefillSource;
     if (initial != null) {
       _activityNameController.text = initial.activityName?.trim() ?? '';
       _detailsController.text = initial.details?.trim() ?? '';
@@ -101,6 +127,36 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
       _dateController.text = _formatDateOnly(initial.date);
       _selectedBarangay =
           initial.barangay.trim().isEmpty ? null : initial.barangay.trim();
+    }
+
+    if (pendingPayload != null) {
+      final seedRows = ((pendingPayload['seedRows'] as List?) ?? const [])
+          .map((r) => Map<String, dynamic>.from(r as Map))
+          .toList();
+      _seedlings = seedRows
+          .map((r) => SeedlingEntry(
+                seedlingType: (r['seed_name'] ?? '').toString(),
+                quantity: (r['seedling_count'] as num?)?.toInt() ?? 0,
+              ))
+          .where((s) => s.seedlingType.isNotEmpty)
+          .toList();
+
+      final coords = ((pendingPayload['coordinates'] as List?) ?? const [])
+          .map((c) => Map<String, dynamic>.from(c as Map))
+          .toList();
+      capturedCoordinates = coords
+          .map((c) {
+            final stablePhotoPath = c['stablePhotoPath'] as String?;
+            return <String, dynamic>{
+              'lat': (c['lat'] as num?)?.toDouble(),
+              'lng': (c['lng'] as num?)?.toDouble(),
+              if (stablePhotoPath != null && stablePhotoPath.isNotEmpty)
+                'photoPath': stablePhotoPath,
+            };
+          })
+          .where((c) => c['lat'] != null && c['lng'] != null)
+          .toList();
+      _updateAreaFromCoordinates();
     }
 
     _requestLocationPermission();
@@ -248,6 +304,62 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
 
       const treeSpecies = '';
       final numberOfTrees = _totalSeedlings;
+
+      // ── Pending-draft edit path ─────────────────────────────────────────
+      // Rewriting a still-queued offline draft is a purely local operation
+      // — no connectivity check needed.
+      if (_isEditingPending) {
+        final pendingPlanting = TreePlanting(
+          projectTypeId: 6,
+          userid: authUserId,
+          userSeqId: AuthSession.currentUser?.seqId,
+          activityName: activityName,
+          barangay: barangay,
+          municipality: municipality,
+          details: details.isEmpty ? null : details,
+          treeSpecies: treeSpecies,
+          numberOfTrees: numberOfTrees,
+          areaCover: parsedArea,
+          date: parsedDate,
+        );
+        final seedRows = _seedlings
+            .map((s) => {
+                  'seed_name': s.seedlingType,
+                  'seedling_count': s.quantity,
+                })
+            .toList();
+
+        try {
+          await OfflineSyncService.updatePendingPlantingItem(
+            localId: widget.pendingLocalId!,
+            planting: pendingPlanting,
+            seedRows: seedRows,
+            coordinates: List<Map<String, dynamic>>.from(capturedCoordinates),
+            divisionTypeId: _resolveDivisionTypeId(),
+          );
+        } catch (e) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Unable to save data.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Data was saved.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 3),
+          ),
+        );
+        widget.onSave(pendingPlanting);
+        return;
+      }
+      // ── End pending-draft edit path ─────────────────────────────────────
 
       // ── Offline path ────────────────────────────────────────────────────
       final isOnline = await OfflineSyncService.hasInternetConnection();
@@ -587,7 +699,7 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
         _municipalityOptions = options;
       });
 
-      final initial = widget.initialData;
+      final initial = _prefillSource;
       if (!_didApplyInitialMunicipality && initial != null) {
         _didApplyInitialMunicipality = true;
         final initialMunicipality = initial.municipality.trim().toLowerCase();
@@ -1450,8 +1562,25 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                         onPressed: _isLoadingSeedlings
                             ? null
                             : () async {
-                                final seedlingNames =
-                                    await ApiService.getMangroveSpeciesNames();
+                                // Open instantly with whatever's cached so
+                                // the button doesn't sit there waiting on a
+                                // network round-trip; refresh the cache in
+                                // the background for next time.
+                                final cached =
+                                    ApiService.getCachedMangroveSpeciesNames();
+                                List<String> seedlingNames;
+                                if (cached.isNotEmpty) {
+                                  seedlingNames = cached;
+                                  ApiService.getMangroveSpeciesNames();
+                                } else {
+                                  setState(() => _isLoadingSeedlings = true);
+                                  seedlingNames =
+                                      await ApiService.getMangroveSpeciesNames();
+                                  if (!mounted) return;
+                                  setState(() => _isLoadingSeedlings = false);
+                                }
+
+                                if (!mounted) return;
                                 showDialog(
                                   context: context,
                                   builder: (context) => AddSeedlingDialog(

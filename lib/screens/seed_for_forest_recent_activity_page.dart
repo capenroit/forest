@@ -23,9 +23,12 @@ class _SeedForForestRecentActivityPageState
 
   /// Synced records and queued-but-not-yet-synced ("pending sync") records,
   /// loaded together so both refresh in lockstep on initState, pull-to-
-  /// refresh, and after returning from the form.
-  late Future<(List<SeedForForestEntry>, List<Map<String, dynamic>>)>
+  /// refresh, and after returning from the form. The third element carries a
+  /// friendly message when the synced-records fetch failed (e.g. offline) —
+  /// pending items still load from disk in that case, so they aren't lost.
+  late Future<(List<SeedForForestEntry>, List<Map<String, dynamic>>, String?)>
       _pageDataFuture;
+  bool _isSyncing = false;
 
   @override
   void initState() {
@@ -33,22 +36,52 @@ class _SeedForForestRecentActivityPageState
     _pageDataFuture = _loadPageData();
   }
 
-  Future<(List<SeedForForestEntry>, List<Map<String, dynamic>>)>
+  Future<(List<SeedForForestEntry>, List<Map<String, dynamic>>, String?)>
       _loadPageData() async {
-    final results = await Future.wait<Object>([
-      _loadRecentActivities(),
-      OfflineSyncService.getPendingItems(type: 'seed_for_forest'),
-    ]);
-    return (
-      results[0] as List<SeedForForestEntry>,
-      results[1] as List<Map<String, dynamic>>,
-    );
+    List<SeedForForestEntry> activities = const [];
+    String? errorMessage;
+    try {
+      activities = await _loadRecentActivities();
+    } catch (e) {
+      errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+    }
+
+    final pendingItems =
+        await OfflineSyncService.getPendingItems(type: 'seed_for_forest');
+    return (activities, pendingItems, errorMessage);
   }
 
   void _refresh() {
     setState(() {
       _pageDataFuture = _loadPageData();
     });
+  }
+
+  Future<void> _syncNow() async {
+    if (_isSyncing) return;
+    setState(() => _isSyncing = true);
+
+    final synced = await OfflineSyncService.syncAll();
+
+    if (!mounted) return;
+    final nextFuture = _loadPageData();
+    setState(() {
+      _pageDataFuture = nextFuture;
+      _isSyncing = false;
+    });
+    await nextFuture;
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          synced > 0
+              ? 'Synced $synced record${synced == 1 ? '' : 's'}.'
+              : 'Unable to sync — check your internet connection.',
+        ),
+        backgroundColor: synced > 0 ? Colors.green : Colors.red,
+      ),
+    );
   }
 
   @override
@@ -96,8 +129,8 @@ class _SeedForForestRecentActivityPageState
                 _refresh();
                 await _pageDataFuture;
               },
-              child:
-                  FutureBuilder<(List<SeedForForestEntry>, List<Map<String, dynamic>>)>(
+              child: FutureBuilder<
+                  (List<SeedForForestEntry>, List<Map<String, dynamic>>, String?)>(
                 future: _pageDataFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -109,7 +142,8 @@ class _SeedForForestRecentActivityPageState
                       child: Padding(
                         padding: const EdgeInsets.all(20),
                         child: Text(
-                          'Failed to load recent activity: ${snapshot.error}',
+                          OfflineSyncService.friendlyErrorMessage(
+                              snapshot.error!),
                           textAlign: TextAlign.center,
                         ),
                       ),
@@ -120,8 +154,11 @@ class _SeedForForestRecentActivityPageState
                       snapshot.data?.$1 ?? const <SeedForForestEntry>[];
                   final pendingItems =
                       snapshot.data?.$2 ?? const <Map<String, dynamic>>[];
+                  final loadError = snapshot.data?.$3;
 
-                  if (activities.isEmpty && pendingItems.isEmpty) {
+                  if (activities.isEmpty &&
+                      pendingItems.isEmpty &&
+                      loadError == null) {
                     return const Center(
                       child: Text('No seed donations found.'),
                     );
@@ -130,11 +167,49 @@ class _SeedForForestRecentActivityPageState
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                     children: [
+                      if (loadError != null) ...[
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            loadError,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Color(0xFFB07C1F)),
+                          ),
+                        ),
+                      ],
                       if (pendingItems.isNotEmpty) ...[
-                        _SectionLabel(
-                          text: 'Pending Sync (${pendingItems.length})',
-                          color: const Color(0xFFB07C1F),
-                          icon: Icons.cloud_off_rounded,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _SectionLabel(
+                                text: 'Pending Sync (${pendingItems.length})',
+                                color: const Color(0xFFB07C1F),
+                                icon: Icons.cloud_off_rounded,
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _isSyncing ? null : _syncNow,
+                              icon: _isSyncing
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Color(0xFFB07C1F),
+                                      ),
+                                    )
+                                  : const Icon(Icons.sync_rounded,
+                                      size: 16, color: Color(0xFFB07C1F)),
+                              label: Text(
+                                _isSyncing ? 'Syncing…' : 'Sync Now',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: Color(0xFFB07C1F),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 10),
                         for (final item in pendingItems)
