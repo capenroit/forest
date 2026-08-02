@@ -1,6 +1,4 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../screens/capiz_flora_fauna_recent_activity_page.dart';
@@ -56,27 +54,13 @@ class _SidePanelState extends State<SidePanel> {
   }
 
   Future<void> _checkConnectivity() async {
-    if (kIsWeb) {
-      if (mounted) {
-        setState(() => _isOnline = true);
-      }
-      return;
-    }
+    final online = await OfflineSyncService.hasInternetConnection();
+    if (!mounted) return;
 
-    try {
-      final response = await http
-          .get(Uri.parse('https://clients3.google.com/generate_204'))
-          .timeout(const Duration(seconds: 5));
-      if (mounted) {
-        final online = response.statusCode == 204 || response.statusCode == 200;
-        setState(() => _isOnline = online);
-        if (online) {
-          // Silently flush any records that were saved while offline.
-          OfflineSyncService.syncAll().ignore();
-        }
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isOnline = false);
+    setState(() => _isOnline = online);
+    if (online) {
+      // Silently flush any records that were saved while offline.
+      OfflineSyncService.syncAll().ignore();
     }
   }
 
@@ -105,20 +89,7 @@ class _SidePanelState extends State<SidePanel> {
     );
   }
 
-  Future<bool> _checkConnectivityNow() async {
-    if (kIsWeb) {
-      return true;
-    }
-
-    try {
-      final response = await http
-          .get(Uri.parse('https://clients3.google.com/generate_204'))
-          .timeout(const Duration(seconds: 5));
-      return response.statusCode == 204 || response.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> _checkConnectivityNow() => OfflineSyncService.hasInternetConnection();
 
   @override
   Widget build(BuildContext context) {

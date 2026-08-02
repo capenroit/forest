@@ -36,16 +36,29 @@ class OfflineSyncService {
 
   static bool get isOfflineCapable => !kIsWeb && Platform.isAndroid;
 
+  /// Checks connectivity by racing a generic probe against a direct check
+  /// of the actual backend, succeeding if either responds. A single probe
+  /// (previously just Google's captive-portal URL) can give a false
+  /// "offline" result on networks/carriers that block or throttle that one
+  /// specific endpoint while every other host — including Supabase, the
+  /// only one that actually matters to this app — is perfectly reachable.
   static Future<bool> hasInternetConnection() async {
     if (!isOfflineCapable) {
       return true;
     }
 
+    final results = await Future.wait([
+      _pingUrl('https://clients3.google.com/generate_204'),
+      _pingUrl('${ApiService.supabaseUrl}/auth/v1/health'),
+    ]);
+    return results.contains(true);
+  }
+
+  static Future<bool> _pingUrl(String url) async {
     try {
-      final response = await http
-          .get(Uri.parse('https://clients3.google.com/generate_204'))
-          .timeout(const Duration(seconds: 5));
-      return response.statusCode == 204 || response.statusCode == 200;
+      final response =
+          await http.get(Uri.parse(url)).timeout(const Duration(seconds: 5));
+      return response.statusCode >= 200 && response.statusCode < 500;
     } catch (_) {
       return false;
     }

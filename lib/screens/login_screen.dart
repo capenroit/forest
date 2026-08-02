@@ -1,6 +1,8 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -26,16 +28,41 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   bool _rememberMe = true;
 
-  Future<bool> _hasInternetConnection() async {
-    try {
-      final response = await http
-          .get(Uri.parse('https://clients3.google.com/generate_204'))
-          .timeout(const Duration(seconds: 5));
-
-      return response.statusCode == 204 || response.statusCode == 200;
-    } catch (_) {
-      return false;
+  /// Short, human-readable summary of a network failure for display in a
+  /// SnackBar — e.g. "timed out" or "Failed host lookup" rather than a full
+  /// stack-trace-style exception dump.
+  String _describeNetworkError(Object error) {
+    if (error is TimeoutException) return 'timed out';
+    if (error is SocketException) {
+      return error.osError?.message ?? error.message;
     }
+    final text = error.toString().replaceFirst('Exception: ', '');
+    return text.length > 80 ? '${text.substring(0, 80)}…' : text;
+  }
+
+  /// Attempts sign-in up to 3 times, retrying only on network-classified
+  /// failures (DNS/socket/timeout) with a short delay between attempts.
+  /// Covers transient hiccups seen right at cold app launch on some Android
+  /// devices, where the first request can fail with "Failed host lookup"
+  /// even though the network is genuinely fine a second later — without
+  /// this, that single flaky first attempt would wrongly drop the user into
+  /// offline-login mode.
+  Future<AuthResponse> _signInWithRetry(String email, String password) async {
+    const maxAttempts = 3;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await Supabase.instance.client.auth
+            .signInWithPassword(email: email, password: password)
+            .timeout(const Duration(seconds: 20));
+      } catch (error) {
+        final isLastAttempt = attempt == maxAttempts;
+        if (isLastAttempt || !OfflineSyncService.isNetworkError(error)) {
+          rethrow;
+        }
+        await Future.delayed(const Duration(seconds: 2));
+      }
+    }
+    throw StateError('unreachable');
   }
 
   Future<void> _saveCredentials(String email, String password) async {
@@ -94,50 +121,60 @@ class _LoginScreenState extends State<LoginScreen> {
 
     setState(() => _isLoading = true);
 
+    final canUseOfflineLogin = !kIsWeb;
+
     try {
-      final canUseOfflineLogin = !kIsWeb;
-      final isOnline =
-          canUseOfflineLogin ? await _hasInternetConnection() : true;
+      AuthResponse response;
+      try {
+        response = await _signInWithRetry(email, password);
+      } catch (error) {
+        // Fall back to cached-credential offline login only for a genuine
+        // connectivity failure on the actual sign-in call — not based on a
+        // separate probe URL beforehand, which can report "offline" on
+        // networks that block that one probe while Supabase itself is
+        // perfectly reachable (the previous approach, and the cause of
+        // false "no internet" reports on some carriers/devices).
+        if (canUseOfflineLogin && OfflineSyncService.isNetworkError(error)) {
+          final offlineSuccess = await _tryOfflineLogin(email, password);
 
-      if (canUseOfflineLogin && !isOnline) {
-        final offlineSuccess = await _tryOfflineLogin(email, password);
+          if (!mounted) {
+            return;
+          }
 
-        if (!mounted) {
+          if (offlineSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Offline login successful. Using cached credentials.',
+                ),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 2),
+              ),
+            );
+
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (context) => const HomeScreen()),
+            );
+          } else {
+            // Surfaces the actual connectivity failure (timeout, DNS,
+            // connection refused, etc.) instead of a generic message, so a
+            // "connected to WiFi but this still happens" report is
+            // diagnosable from the screen alone.
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Unable to reach the server (${_describeNetworkError(error)}). '
+                  'No cached credentials for offline login either.',
+                ),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 6),
+              ),
+            );
+          }
           return;
         }
-
-        if (offlineSuccess) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Offline login successful. Using cached credentials.',
-              ),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 2),
-            ),
-          );
-
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (context) => const HomeScreen()),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Offline mode: no matching cached credentials. Go online to sign in first.',
-              ),
-              backgroundColor: Colors.orange,
-              duration: Duration(seconds: 4),
-            ),
-          );
-        }
-        return;
+        rethrow;
       }
-
-      final response = await Supabase.instance.client.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
 
       if (response.session == null) {
         if (!mounted) {
