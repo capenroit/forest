@@ -180,8 +180,8 @@ class _SidePanelState extends State<SidePanel> {
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child:
-                          const Icon(Icons.eco, color: Colors.green, size: 32),
+                      clipBehavior: Clip.antiAlias,
+                      child: Image.asset('assets/logo.png', fit: BoxFit.cover),
                     ),
                     const SizedBox(width: 12),
                     const Text(
