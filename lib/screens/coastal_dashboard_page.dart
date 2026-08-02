@@ -1,7 +1,9 @@
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
@@ -11,6 +13,7 @@ import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
 import 'package:latlong2/latlong.dart' as ll;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../widget/export_options_dialog.dart';
@@ -34,6 +37,16 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
   static const int _marineProtectedAreaTypeId = 9;
   static const int _mangrovePlantingTypeId = 6;
 
+  // Prefixed distinctly from dashboard_page.dart's SharedPreferences keys
+  // (e.g. 'location_json') so the two dashboards' offline caches never
+  // collide on a device where a user can see both.
+  static const String _cacheKeyLocation = 'coastal_location_json';
+  static const String _cacheKeyHabitat = 'coastal_habitat_json';
+  static const String _cacheKeyMarine = 'coastal_marine_json';
+  static const String _cacheKeyMangrove = 'coastal_mangrove_json';
+  static const String _cacheKeyDate = 'coastal_markers_cache_date';
+  static const String _cacheKeyProjectTypes = 'coastal_project_types_json';
+
   int _habitatCount = 0;
   int _marineCount = 0;
   int _mangroveCount = 0;
@@ -52,6 +65,7 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
   List<Marker> _markers = [];
   List<Polygon> _polygons = [];
   bool _isLoadingMarkers = true;
+  bool _isCachedMarkers = false;
   bool _hasExpandedCluster = false;
   int _mapTapVersion = 0;
   final GlobalKey _mapCaptureKey = GlobalKey();
@@ -73,6 +87,12 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
 
   Future<void> _loadProjectTypes() async {
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) {
+        await _loadProjectTypesFromCache();
+        return;
+      }
+
       final response = await Supabase.instance.client
           .from('project_type')
           .select('id, projectname')
@@ -87,6 +107,24 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
       final typed = response
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_cacheKeyProjectTypes, jsonEncode(typed));
+
+      if (!mounted) return;
+      setState(() {
+        _projectTypes = typed;
+        _isLoadingProjectTypes = false;
+      });
+    } catch (_) {
+      await _loadProjectTypesFromCache();
+    }
+  }
+
+  Future<void> _loadProjectTypesFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final typed = _decodeCachedRows(prefs.getString(_cacheKeyProjectTypes));
 
       if (!mounted) return;
       setState(() {
@@ -122,6 +160,12 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
     });
 
     try {
+      final connectivity = await Connectivity().checkConnectivity();
+      if (connectivity.contains(ConnectivityResult.none)) {
+        await _loadMarkersAndStatsFromCache();
+        return;
+      }
+
       final locationResponse = await Supabase.instance.client
           .from('location')
           .select('id, activity_id, activity_type_id, latitude, longitude')
@@ -165,49 +209,36 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
           .map((row) => Map<String, dynamic>.from(row as Map))
           .toList();
 
-      final habitatById = <int, Map<String, dynamic>>{};
-      for (final row in typedHabitatRows) {
-        final id = _toInt(row['id']);
-        if (id != null) habitatById[id] = row;
-      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_cacheKeyLocation, jsonEncode(typedLocationRows));
+      await prefs.setString(_cacheKeyHabitat, jsonEncode(typedHabitatRows));
+      await prefs.setString(_cacheKeyMarine, jsonEncode(typedMarineRows));
+      await prefs.setString(_cacheKeyMangrove, jsonEncode(typedMangroveRows));
+      await prefs.setString(_cacheKeyDate, DateTime.now().toIso8601String());
 
-      final marineById = <int, Map<String, dynamic>>{};
-      for (final row in typedMarineRows) {
-        final id = _toInt(row['id']);
-        if (id != null) marineById[id] = row;
-      }
+      _applyLoadedRows(
+        locationRows: typedLocationRows,
+        habitatRows: typedHabitatRows,
+        marineRows: typedMarineRows,
+        mangroveRows: typedMangroveRows,
+        isCached: false,
+      );
+    } catch (_) {
+      await _loadMarkersAndStatsFromCache();
+    }
+  }
 
-      final mangroveById = <int, Map<String, dynamic>>{};
-      for (final row in typedMangroveRows) {
-        final id = _toInt(row['seq_id']);
-        if (id != null) mangroveById[id] = row;
-      }
+  Future<void> _loadMarkersAndStatsFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
 
-      double totalArea = 0;
-      for (final row in typedHabitatRows) {
-        totalArea += (_toDouble(row['area']) ?? 0);
-      }
-      for (final row in typedMarineRows) {
-        totalArea += (_toDouble(row['area']) ?? 0);
-      }
-      for (final row in typedMangroveRows) {
-        totalArea += (_toDouble(row['area_cover']) ?? 0);
-      }
-
-      if (!mounted) return;
-      setState(() {
-        _allLocationRows = typedLocationRows;
-        _habitatById = habitatById;
-        _marineById = marineById;
-        _mangroveById = mangroveById;
-        _habitatCount = typedHabitatRows.length;
-        _marineCount = typedMarineRows.length;
-        _mangroveCount = typedMangroveRows.length;
-        _totalAreaHa = totalArea;
-        _isLoadingStats = false;
-      });
-
-      _applyProjectTypeFilter();
+      _applyLoadedRows(
+        locationRows: _decodeCachedRows(prefs.getString(_cacheKeyLocation)),
+        habitatRows: _decodeCachedRows(prefs.getString(_cacheKeyHabitat)),
+        marineRows: _decodeCachedRows(prefs.getString(_cacheKeyMarine)),
+        mangroveRows: _decodeCachedRows(prefs.getString(_cacheKeyMangrove)),
+        isCached: true,
+      );
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -215,6 +246,67 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
         _isLoadingStats = false;
       });
     }
+  }
+
+  List<Map<String, dynamic>> _decodeCachedRows(String? json) {
+    if (json == null) return const [];
+    return List<Map<String, dynamic>>.from(jsonDecode(json) as List);
+  }
+
+  /// Shared by the live-fetch and offline-cache paths: builds the id
+  /// lookup maps and stat totals, updates state, and re-applies the
+  /// current project-type filter to rebuild markers/polygons.
+  void _applyLoadedRows({
+    required List<Map<String, dynamic>> locationRows,
+    required List<Map<String, dynamic>> habitatRows,
+    required List<Map<String, dynamic>> marineRows,
+    required List<Map<String, dynamic>> mangroveRows,
+    required bool isCached,
+  }) {
+    final habitatById = <int, Map<String, dynamic>>{};
+    for (final row in habitatRows) {
+      final id = _toInt(row['id']);
+      if (id != null) habitatById[id] = row;
+    }
+
+    final marineById = <int, Map<String, dynamic>>{};
+    for (final row in marineRows) {
+      final id = _toInt(row['id']);
+      if (id != null) marineById[id] = row;
+    }
+
+    final mangroveById = <int, Map<String, dynamic>>{};
+    for (final row in mangroveRows) {
+      final id = _toInt(row['seq_id']);
+      if (id != null) mangroveById[id] = row;
+    }
+
+    double totalArea = 0;
+    for (final row in habitatRows) {
+      totalArea += (_toDouble(row['area']) ?? 0);
+    }
+    for (final row in marineRows) {
+      totalArea += (_toDouble(row['area']) ?? 0);
+    }
+    for (final row in mangroveRows) {
+      totalArea += (_toDouble(row['area_cover']) ?? 0);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _allLocationRows = locationRows;
+      _habitatById = habitatById;
+      _marineById = marineById;
+      _mangroveById = mangroveById;
+      _habitatCount = habitatRows.length;
+      _marineCount = marineRows.length;
+      _mangroveCount = mangroveRows.length;
+      _totalAreaHa = totalArea;
+      _isLoadingStats = false;
+      _isCachedMarkers = isCached;
+    });
+
+    _applyProjectTypeFilter();
   }
 
   Color _markerColorForType(int activityTypeId) {
@@ -913,6 +1005,14 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
                   ],
                 ),
               ),
+              if (_isCachedMarkers)
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    'Showing cached marker data',
+                    style: TextStyle(color: Colors.amber.shade800),
+                  ),
+                ),
               const SizedBox(height: 24),
               GridView.count(
                 crossAxisCount: 3,

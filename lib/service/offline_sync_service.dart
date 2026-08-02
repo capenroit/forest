@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'activity_model.dart';
@@ -441,7 +442,123 @@ class OfflineSyncService {
       _safely(() => SeedlingListService().getSeedlingNames()),
       _safely(() => ApiService.getMangroveSpeciesNames()),
       _safely(_warmTreeGrowingCache),
+      _safely(_warmDashboardMapCache),
+      _safely(_warmCoastalMapCache),
     ]);
+  }
+
+  /// Mirrors dashboard_page.dart's `_loadTreeGrowingMarkers` cache-write
+  /// (same SharedPreferences keys: 'tree_growing_json', 'location_json',
+  /// etc.) so the main dashboard's map already has data offline even if the
+  /// user never opened it while online first. Keep the table list and keys
+  /// here in sync with that page if either one changes.
+  static Future<void> _warmDashboardMapCache() async {
+    final treeGrowingResponse = await Supabase.instance.client
+        .from('tree_growing')
+        .select('*')
+        .eq('is_deleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final treeGrowingDataResponse = await Supabase.instance.client
+        .from('tree_growing_data')
+        .select('tree_growing_id')
+        .timeout(const Duration(seconds: 8));
+
+    final locationResponse = await Supabase.instance.client
+        .from('location')
+        .select('id, activity_id, activity_type_id, latitude, longitude')
+        .eq('isDeleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final floraFaunaResponse = await Supabase.instance.client
+        .from('flora_fauna_survey')
+        .select('*')
+        .eq('is_deleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final floraFaunaDataResponse = await Supabase.instance.client
+        .from('flora_fauna_survey_data')
+        .select('flora_fauna_id')
+        .timeout(const Duration(seconds: 8));
+
+    final idsWithSpeciesData = treeGrowingDataResponse
+        .map((row) => (row as Map)['tree_growing_id'])
+        .whereType<num>()
+        .map((id) => id.toInt())
+        .toSet();
+
+    final floraFaunaIdsWithSpeciesData = floraFaunaDataResponse
+        .map((row) => (row as Map)['flora_fauna_id'])
+        .whereType<num>()
+        .map((id) => id.toInt())
+        .toSet();
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('tree_growing_json', jsonEncode(treeGrowingResponse));
+    await prefs.setString(
+      'tree_growing_data_ids_json',
+      jsonEncode(idsWithSpeciesData.toList()),
+    );
+    await prefs.setString('location_json', jsonEncode(locationResponse));
+    await prefs.setString(
+        'flora_fauna_survey_json', jsonEncode(floraFaunaResponse));
+    await prefs.setString(
+      'flora_fauna_survey_data_ids_json',
+      jsonEncode(floraFaunaIdsWithSpeciesData.toList()),
+    );
+    await prefs.setString('markers_cache_date', DateTime.now().toIso8601String());
+  }
+
+  /// Mirrors coastal_dashboard_page.dart's cache-write (same
+  /// 'coastal_*' SharedPreferences keys) so the coastal map's data is
+  /// already warm offline. Keep in sync with that page if either changes.
+  static Future<void> _warmCoastalMapCache() async {
+    const habitatTypeId = 8;
+    const marineTypeId = 9;
+    const mangroveTypeId = 6;
+
+    final locationResponse = await Supabase.instance.client
+        .from('location')
+        .select('id, activity_id, activity_type_id, latitude, longitude')
+        .inFilter('activity_type_id', [habitatTypeId, marineTypeId, mangroveTypeId])
+        .eq('isDeleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final habitatResponse = await Supabase.instance.client
+        .from('crm_habitat_assssment')
+        .select()
+        .eq('is_deleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final marineResponse = await Supabase.instance.client
+        .from('crm_marine_protected')
+        .select()
+        .eq('is_deleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final mangroveResponse = await Supabase.instance.client
+        .from('tree_growing')
+        .select()
+        .eq('project_type_id', mangroveTypeId)
+        .eq('is_deleted', 0)
+        .timeout(const Duration(seconds: 8));
+
+    final projectTypesResponse = await Supabase.instance.client
+        .from('project_type')
+        .select('id, projectname')
+        .inFilter('id', [habitatTypeId, marineTypeId, mangroveTypeId])
+        .order('id')
+        .timeout(const Duration(seconds: 8));
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('coastal_location_json', jsonEncode(locationResponse));
+    await prefs.setString('coastal_habitat_json', jsonEncode(habitatResponse));
+    await prefs.setString('coastal_marine_json', jsonEncode(marineResponse));
+    await prefs.setString('coastal_mangrove_json', jsonEncode(mangroveResponse));
+    await prefs.setString(
+        'coastal_project_types_json', jsonEncode(projectTypesResponse));
+    await prefs.setString(
+        'coastal_markers_cache_date', DateTime.now().toIso8601String());
   }
 
   static Future<void> _safely(Future<dynamic> Function() action) async {
