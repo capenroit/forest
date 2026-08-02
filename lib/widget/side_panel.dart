@@ -30,6 +30,25 @@ class SidePanel extends StatefulWidget {
 class _SidePanelState extends State<SidePanel> {
   bool _isOnline = true;
 
+  // Mirrors the division picker in signup_screen.dart / manage_members_page
+  // .dart. SWM (3) belongs to a separate app this one doesn't sign in for,
+  // but a user's own division_type_id could still be 3 (e.g. an admin
+  // account), so it's kept here for a correct label.
+  static const Map<int, String> _divisionNames = {
+    1: 'FMS',
+    2: 'CRM',
+    3: 'SWM',
+  };
+
+  // Mirrors the access_level lookup table in Supabase (id, name,
+  // description): 1=Admin, 2=Data Manager, 3=Data Collector, 4=Recipient.
+  static const Map<int, String> _accessLevelNames = {
+    1: 'Admin',
+    2: 'Data Manager',
+    3: 'Data Collector',
+    4: 'Recipient',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -106,6 +125,12 @@ class _SidePanelState extends State<SidePanel> {
     final user = AuthSession.currentUser;
     final displayName = user?.name ?? 'User';
     final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : 'U';
+    final divisionLabel = _divisionNames[user?.divisionTypeId];
+    final accessLevelLabel = _accessLevelNames[user?.accessLevel];
+    final roleSubtitle = [
+      if (divisionLabel != null) divisionLabel,
+      if (accessLevelLabel != null) accessLevelLabel,
+    ].join(' • ');
 
     // division_type_id gates which activity group shows: 1 = Forest
     // Management, 2 = Coastal Management. Anything else (null/unrecognized)
@@ -234,6 +259,18 @@ class _SidePanelState extends State<SidePanel> {
                           ),
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (roleSubtitle.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            roleSubtitle,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                         const SizedBox(height: 2),
                         Row(
                           children: [
