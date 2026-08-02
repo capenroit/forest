@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/location_capture_service.dart';
 import '../service/lookup_service.dart';
 import '../service/offline_sync_service.dart';
 import '../service/seedling_list_service.dart';
@@ -158,7 +159,13 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
           })
           .where((c) => c['lat'] != null && c['lng'] != null)
           .toList();
-      _updateAreaFromCoordinates();
+      // Only recompute when there are enough points to form a polygon —
+      // otherwise this would wipe out the area we just loaded from the
+      // saved draft (see the "else" branch of _updateAreaFromCoordinates,
+      // which clears the field when there are fewer than 3 points).
+      if (capturedCoordinates.length >= 3) {
+        _updateAreaFromCoordinates();
+      }
     }
 
     _requestLocationPermission();
@@ -197,6 +204,35 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
     final extension = _extractFileExtension(sourcePath);
     final fallbackExtension = extension.isEmpty ? '.jpg' : extension;
     return 'photo_000_${divisionTypeId}_${_treeGrowingActivityTypeId}_${activityId}_$photoId$fallbackExtension';
+  }
+
+  /// Storage object paths can't safely contain spaces, slashes, or other
+  /// punctuation from free-text fields — keep only alphanumerics, folding
+  /// everything else down to a single underscore.
+  String _sanitizeForFileName(String value) {
+    final sanitized = value
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return sanitized.isEmpty ? 'unnamed' : sanitized;
+  }
+
+  /// The `photo.name` / `photourl_area.name` shown to users — unlike
+  /// [_buildTreeGrowingPhotoName] (the storage object path, which must stay
+  /// unique), this is the plain `tree_growing_{activityName}_Point{N}` the
+  /// user actually wants to see. [photoIndex] is 1-based and counts only
+  /// points that actually have a photo, so two photos on one save come out
+  /// `..._Point1` and `..._Point2` — letting the point each photo belongs
+  /// to be told apart at a glance in the photo gallery.
+  String _buildTreeGrowingDisplayName({
+    required String activityName,
+    required int photoIndex,
+    required String sourcePath,
+  }) {
+    final extension = _extractFileExtension(sourcePath);
+    final fallbackExtension = extension.isEmpty ? '.jpg' : extension;
+    final safeActivityName = _sanitizeForFileName(activityName);
+    return 'tree_growing_${safeActivityName}_Point$photoIndex$fallbackExtension';
   }
 
   int _resolveDivisionTypeId() {
@@ -481,6 +517,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
           }
 
           if (activityId != null && capturedCoordinates.isNotEmpty) {
+            var photoCounter = 0;
             for (final coord in capturedCoordinates) {
               final latitude = (coord['lat'] as num?)?.toDouble();
               final longitude = (coord['lng'] as num?)?.toDouble();
@@ -516,6 +553,12 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                     photoId: existingSeqId,
                     sourcePath: photoPath,
                   );
+                  photoCounter++;
+                  final displayName = _buildTreeGrowingDisplayName(
+                    activityName: activityName,
+                    photoIndex: photoCounter,
+                    sourcePath: photoPath,
+                  );
 
                   final supabasePhotoUrl =
                       await _uploadTreeGrowingPhotoToSupabase(
@@ -526,7 +569,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                   await ApiService.updatePhotourlAreaPhotoUrl(
                     photourlAreaId: existingPhotourlAreaId,
                     photoUrl: supabasePhotoUrl,
-                    photoName: photoName,
+                    photoName: displayName,
                   );
 
                   coord['photoPath'] = null;
@@ -561,6 +604,12 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                   photoId: locationId ?? DateTime.now().millisecondsSinceEpoch,
                   sourcePath: photoPath,
                 );
+                photoCounter++;
+                final displayName = _buildTreeGrowingDisplayName(
+                  activityName: activityName,
+                  photoIndex: photoCounter,
+                  sourcePath: photoPath,
+                );
 
                 final supabasePhotoUrl =
                     await _uploadTreeGrowingPhotoToSupabase(
@@ -571,7 +620,9 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                 await ApiService.createPhotoRow(
                   projectTypeId: _treeGrowingActivityTypeId,
                   activityId: activityId,
+                  name: displayName,
                   photoUrl: supabasePhotoUrl,
+                  locationId: locationId,
                 );
 
                 coord['photoPath'] = null;
@@ -923,23 +974,37 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
         };
       }).where((row) => row['lat'] != null && row['lng'] != null);
 
-      // Points captured after the migration to location/photo. Photos for
-      // these aren't reloaded per-point here (the location/photo tables
-      // don't link them 1:1) — same limitation Flora & Fauna's edit flow
-      // has.
+      // Points captured after the migration to location/photo. Each photo
+      // row carries the location.id it was taken at, so it can be matched
+      // straight back to its point.
       final locationRows = await ApiService.getLocationRowsByActivity(
         activityTypeId: _treeGrowingActivityTypeId,
         activityId: seqId,
       );
+      final photoRows = await ApiService.getPhotosForActivity(
+        projectTypeId: _treeGrowingActivityTypeId,
+        activityId: seqId,
+      );
+      final photoUrlByLocationId = <int, String>{};
+      for (final photo in photoRows) {
+        final locationId = (photo['location_id'] as num?)?.toInt();
+        final photoUrl = photo['photo_url'] as String?;
+        if (locationId != null && photoUrl != null && photoUrl.isNotEmpty) {
+          photoUrlByLocationId[locationId] = photoUrl;
+        }
+      }
 
       final migratedCoordinates = locationRows.map((row) {
         final lat = (row['latitude'] as num?)?.toDouble();
         final lng = (row['longitude'] as num?)?.toDouble();
+        final locationId = (row['id'] as num?)?.toInt();
 
         return <String, dynamic>{
           'lat': lat,
           'lng': lng,
-          'locationRowId': (row['id'] as num?)?.toInt(),
+          'locationRowId': locationId,
+          if (locationId != null && photoUrlByLocationId[locationId] != null)
+            'photoUrl': photoUrlByLocationId[locationId],
         };
       }).where((row) => row['lat'] != null && row['lng'] != null);
 
@@ -953,7 +1018,13 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
         capturedCoordinates = loadedCoordinates;
       });
 
-      _updateAreaFromCoordinates();
+      // Only recompute when there are enough points to form a polygon —
+      // otherwise this would wipe out the area already loaded from the
+      // saved record (see the "else" branch of _updateAreaFromCoordinates,
+      // which clears the field when there are fewer than 3 points).
+      if (capturedCoordinates.length >= 3) {
+        _updateAreaFromCoordinates();
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -983,32 +1054,36 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
     setState(() => _isCapturingLocation = true);
 
     try {
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final result = await LocationCaptureService.capture();
 
       if (!mounted) return;
 
       // Store GPS coordinates locally (will be saved to database when user presses save)
       setState(() {
         capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': result.position.latitude,
+          'lng': result.position.longitude,
         });
         _updateAreaFromCoordinates(); // Compute area after adding coordinate
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Data updated.'),
-          backgroundColor: Colors.blue,
+        SnackBar(
+          content: Text(
+            result.isFallback
+                ? 'GPS fix timed out — used your last known location. Verify it or retake.'
+                : 'Data updated.',
+          ),
+          backgroundColor: result.isFallback ? Colors.orange : Colors.blue,
         ),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Unable to update data.'),
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -1065,17 +1140,15 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
         return;
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final result = await LocationCaptureService.capture();
 
       if (!mounted) return;
 
       // Keep camera temp path only until Save uploads to Supabase.
       setState(() {
         capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': result.position.latitude,
+          'lng': result.position.longitude,
           'photoPath': photo.path,
         });
         _updateAreaFromCoordinates(); // Compute area after adding coordinate
@@ -1083,9 +1156,13 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Data updated.'),
-          backgroundColor: Colors.green,
+        SnackBar(
+          content: Text(
+            result.isFallback
+                ? 'GPS fix timed out — used your last known location. Verify it or retake.'
+                : 'Data updated.',
+          ),
+          backgroundColor: result.isFallback ? Colors.orange : Colors.green,
         ),
       );
     } catch (e) {
@@ -1098,15 +1175,11 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
       if (!mounted) return;
       setState(() => _isCapturingLocation = false);
 
-      String errorMessage = 'Unable to update data.';
-      if (e.toString().contains('timeout') ||
-          e.toString().contains('TimeoutException')) {
-        errorMessage = 'Action timed out.';
-      }
-
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(errorMessage),
+        const SnackBar(
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -1301,6 +1374,7 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
             throw TimeoutException('Delete area timed out after 10 seconds');
           },
         );
+        await ApiService.deletePhotoRowsForLocation(locationRowId);
 
         if (!mounted) return;
 

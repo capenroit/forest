@@ -10,12 +10,18 @@ class AddFloraFaunaDialog extends StatefulWidget {
     required String scientificName,
     String? classification,
     String? photoPath,
+    String? existingPhotoUrl,
   }) onAdd;
   final String? initialSpeciesType;
   final String? initialName;
   final String? initialScientificName;
   final String? initialClassification;
   final String? initialPhotoPath;
+
+  /// URL of a photo already uploaded for this species on a previous save
+  /// (matched back by name — see capiz_flora_fauna_recent_activity_page
+  /// .dart). Shown read-only; capturing a new photo supersedes it.
+  final String? initialExistingPhotoUrl;
   final String submitLabel;
 
   const AddFloraFaunaDialog({
@@ -26,6 +32,7 @@ class AddFloraFaunaDialog extends StatefulWidget {
     this.initialScientificName,
     this.initialClassification,
     this.initialPhotoPath,
+    this.initialExistingPhotoUrl,
     this.submitLabel = 'Add Species',
   });
 
@@ -40,6 +47,7 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
   late TextEditingController _scientificNameController;
   late String _speciesType;
   String? _capturedPhotoPath;
+  String? _existingPhotoUrl;
   List<LookupOption> _classificationOptions = [];
   LookupOption? _selectedClassification;
   bool _isLoadingClassifications = false;
@@ -52,6 +60,7 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
     _scientificNameController =
         TextEditingController(text: widget.initialScientificName ?? '');
     _capturedPhotoPath = widget.initialPhotoPath;
+    _existingPhotoUrl = widget.initialExistingPhotoUrl;
     _loadClassificationOptions(preserveSelection: true);
   }
 
@@ -106,6 +115,7 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
       if (!mounted || photo == null) return;
       setState(() {
         _capturedPhotoPath = photo.path;
+        _existingPhotoUrl = null;
       });
     } catch (_) {
       if (!mounted) return;
@@ -414,19 +424,22 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
                               ),
                               icon: const Icon(Icons.camera_alt_outlined),
                               label: Text(
-                                _capturedPhotoPath == null
+                                _capturedPhotoPath == null &&
+                                        _existingPhotoUrl == null
                                     ? 'Capture Photo'
                                     : 'Retake Photo',
                               ),
                             ),
                           ),
-                          if (_capturedPhotoPath != null) ...[
+                          if (_capturedPhotoPath != null ||
+                              _existingPhotoUrl != null) ...[
                             const SizedBox(width: 8),
                             IconButton(
                               tooltip: 'Remove photo',
                               onPressed: () {
                                 setState(() {
                                   _capturedPhotoPath = null;
+                                  _existingPhotoUrl = null;
                                 });
                               },
                               icon: const Icon(
@@ -457,6 +470,37 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
                               color: Colors.green.shade800,
                               fontWeight: FontWeight.w600,
                             ),
+                          ),
+                        ),
+                      ] else if (_existingPhotoUrl != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.blue.shade100),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.check_circle,
+                                  size: 16, color: Colors.blue.shade700),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Existing photo attached',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.blue.shade800,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -500,6 +544,7 @@ class _AddFloraFaunaDialogState extends State<AddFloraFaunaDialog> {
                             scientificName: _scientificNameController.text.trim(),
                             classification: _selectedClassification?.name,
                             photoPath: _capturedPhotoPath,
+                            existingPhotoUrl: _existingPhotoUrl,
                           );
                           Navigator.pop(context);
                         },

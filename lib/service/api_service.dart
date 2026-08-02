@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'activity_model.dart';
 
@@ -303,6 +306,12 @@ class ApiService {
     required int activityId,
     required String photoUrl,
     String? name,
+    // Ties this photo back to the specific GPS point it was taken at
+    // (location.id) — lets Tree Growing / Mangrove Planting reliably
+    // re-populate a point's photo when the activity is edited later,
+    // instead of guessing. Null for photo types not tied to a single
+    // point (e.g. Flora & Fauna species photos, matched by name instead).
+    int? locationId,
   }) async {
     try {
       final payload = <String, dynamic>{
@@ -310,6 +319,7 @@ class ApiService {
         'activity_id': activityId,
         'photo_url': photoUrl,
         if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+        if (locationId != null) 'location_id': locationId,
       };
 
       final response = await _client.from('photo').insert(payload).select().single();
@@ -333,11 +343,16 @@ class ApiService {
     try {
       final data = await _client
           .from('photo')
-          .select('id, name, photo_url')
+          .select('id, name, photo_url, location_id, is_deleted')
           .eq('project_type_id', projectTypeId)
           .eq('activity_id', activityId);
 
-      return List<Map<String, dynamic>>.from(data as List);
+      // Filtered client-side (not via .eq('is_deleted', 0)) because older
+      // rows predate this column and have it as null, which a server-side
+      // equality filter would wrongly exclude.
+      return List<Map<String, dynamic>>.from(data as List)
+          .where((row) => (row['is_deleted'] as num?)?.toInt() != 1)
+          .toList();
     } catch (e) {
       return [];
     }
@@ -1590,18 +1605,53 @@ class ApiService {
 
   // ===== MANGROVE LIST ENDPOINTS =====
 
+  static const String _mangroveSpeciesCacheFileName = 'mangrove_species_cache.json';
   static List<String> _cachedMangroveSpeciesNames = [];
+  static bool _mangroveSpeciesDiskCacheLoaded = false;
+
+  static Future<File> _mangroveSpeciesCacheFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/$_mangroveSpeciesCacheFileName');
+  }
+
+  static Future<void> _loadMangroveSpeciesDiskCache() async {
+    if (_mangroveSpeciesDiskCacheLoaded) return;
+    try {
+      final file = await _mangroveSpeciesCacheFile();
+      if (await file.exists()) {
+        final decoded = jsonDecode(await file.readAsString());
+        if (decoded is List) {
+          _cachedMangroveSpeciesNames = decoded.cast<String>();
+        }
+      }
+    } catch (_) {
+      // Ignore — fall back to empty or network.
+    } finally {
+      _mangroveSpeciesDiskCacheLoaded = true;
+    }
+  }
+
+  static Future<void> _persistMangroveSpeciesCache() async {
+    try {
+      final file = await _mangroveSpeciesCacheFile();
+      await file.writeAsString(jsonEncode(_cachedMangroveSpeciesNames));
+    } catch (_) {
+      // Best effort.
+    }
+  }
 
   /// Returns the last successfully fetched mangrove species names without
   /// a network request — lets a caller open a picker immediately with
-  /// whatever was already loaded this session instead of waiting on
-  /// [getMangroveSpeciesNames].
+  /// whatever was already loaded (this session, or persisted from a
+  /// previous one) instead of waiting on [getMangroveSpeciesNames].
   static List<String> getCachedMangroveSpeciesNames() =>
       List.unmodifiable(_cachedMangroveSpeciesNames);
 
   /// Returns mangrove species names for the Mangrove Planting Activity
   /// Seedling Details dropdown.
   static Future<List<String>> getMangroveSpeciesNames() async {
+    await _loadMangroveSpeciesDiskCache();
+
     try {
       final response = await _client
           .from('mangrove_list')
@@ -1621,10 +1671,12 @@ class ApiService {
       }
 
       _cachedMangroveSpeciesNames = names;
+      await _persistMangroveSpeciesCache();
       return names;
     } catch (e) {
       // Offline, slow connection (timed out above), or otherwise failed —
-      // fall back to whatever was fetched earlier this session.
+      // fall back to whatever was fetched earlier (this session, or a
+      // previous one via disk cache).
       return _cachedMangroveSpeciesNames;
     }
   }
@@ -1854,6 +1906,61 @@ class ApiService {
     } catch (e) {
       throw Exception('Error deleting location row: $e');
     }
+  }
+
+  /// Soft-delete every photo attached to a location point (via
+  /// photo.location_id), so removing a captured point in edit mode also
+  /// hides its photo instead of leaving an orphaned row behind.
+  static Future<void> deletePhotoRowsForLocation(int locationId) async {
+    try {
+      final rows = await _client
+          .from('photo')
+          .select('id, photo_url')
+          .eq('location_id', locationId);
+
+      for (final row in List<Map<String, dynamic>>.from(rows as List)) {
+        final photoId = (row['id'] as num?)?.toInt();
+        if (photoId == null) continue;
+
+        final photoUrl = row['photo_url'] as String?;
+        final renamedUrl = (photoUrl != null && photoUrl.isNotEmpty)
+            ? await _markStorageObjectDeleted(photoUrl)
+            : null;
+
+        await _client.from('photo').update({
+          'is_deleted': 1,
+          if (renamedUrl != null) 'photo_url': renamedUrl,
+        }).eq('id', photoId);
+      }
+    } catch (e) {
+      throw Exception('Error deleting photo row: $e');
+    }
+  }
+
+  /// Renames a storage object in place, appending `-deleted` right before
+  /// its extension (e.g. `photo_1.jpg` -> `photo_1-deleted.jpg`), so
+  /// soft-deleted photos are easy to spot directly in Supabase Storage.
+  /// Best-effort: if the object was already renamed or is missing, the
+  /// move is skipped rather than failing the whole soft-delete.
+  static Future<String?> _markStorageObjectDeleted(String storedPhotoUrl) async {
+    final objectPath = _resolveStorageObjectPath(storedPhotoUrl);
+    if (objectPath.contains('-deleted')) return null;
+
+    final dotIndex = objectPath.lastIndexOf('.');
+    final newObjectPath = dotIndex > 0
+        ? '${objectPath.substring(0, dotIndex)}-deleted${objectPath.substring(dotIndex)}'
+        : '$objectPath-deleted';
+
+    try {
+      await _client.storage
+          .from(activityPhotoStorageBucket)
+          .move(objectPath, newObjectPath);
+    } catch (_) {
+      return null;
+    }
+
+    final encodedBucket = Uri.encodeComponent(activityPhotoStorageBucket);
+    return 'public/$encodedBucket/$newObjectPath';
   }
 
   /// Get all (non-deleted) location rows for a specific activity.

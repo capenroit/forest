@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../home_screen.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -192,6 +193,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
       await _saveCredentials(email, password);
       await AuthSession.cacheUser(profile);
+      // A successful sign-in proves we're online — warm the offline caches
+      // in the background so the app has something to work with if
+      // connectivity drops later. Never blocks navigation to the dashboard.
+      OfflineSyncService.warmCache().ignore();
 
       if (!mounted) {
         return;

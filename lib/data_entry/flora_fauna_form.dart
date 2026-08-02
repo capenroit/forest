@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../service/lookup_service.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/location_capture_service.dart';
 import '../service/offline_sync_service.dart';
 import '../widget/add_flora_fauna_dialog.dart';
 import '../widget/edit_coordinate_dialog.dart';
@@ -18,7 +19,17 @@ class FloraFaunaSpeciesDetail {
   final String name;
   final String scientificName;
   final String? classification;
+
+  /// A local temp file path for a photo captured this session, not yet
+  /// uploaded. Distinct from [existingPhotoUrl] — only this one is ever
+  /// treated as "needs uploading" on save.
   final String? photoPath;
+
+  /// The URL of a photo already uploaded for this species on a previous
+  /// save, looked up by matching `photo.name` back to this species (see
+  /// `_matchExistingSpeciesPhotos` in capiz_flora_fauna_recent_activity_page
+  /// .dart). Shown read-only; never re-uploaded.
+  final String? existingPhotoUrl;
 
   const FloraFaunaSpeciesDetail({
     required this.speciesType,
@@ -26,6 +37,7 @@ class FloraFaunaSpeciesDetail {
     required this.scientificName,
     this.classification,
     this.photoPath,
+    this.existingPhotoUrl,
   });
 }
 
@@ -381,14 +393,50 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
     return 'image/jpeg';
   }
 
+  /// Storage object paths can't safely contain spaces, slashes, or other
+  /// punctuation from free-text fields — keep only alphanumerics, folding
+  /// everything else down to a single underscore.
+  String _sanitizeForFileName(String value) {
+    final sanitized = value
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return sanitized.isEmpty ? 'unnamed' : sanitized;
+  }
+
   String _buildFloraFaunaPhotoName({
     required int surveyId,
+    required String activityName,
+    required String speciesName,
     required int photoIndex,
     required String sourcePath,
   }) {
     final extension = _extractFileExtension(sourcePath);
     final fallbackExtension = extension.isEmpty ? '.jpg' : extension;
-    return 'flora_fauna_${surveyId}_${DateTime.now().millisecondsSinceEpoch}_${photoIndex + 1}$fallbackExtension';
+    final safeActivityName = _sanitizeForFileName(activityName);
+    final safeSpeciesName = _sanitizeForFileName(speciesName);
+    // The activity/species name make the file recognizable at a glance; the
+    // timestamp + index keep it unique so re-uploads never collide (photo
+    // rows are inserted with upsert disabled).
+    return 'flora_fauna_${safeActivityName}_${safeSpeciesName}_'
+        '${DateTime.now().millisecondsSinceEpoch}_${photoIndex + 1}$fallbackExtension';
+  }
+
+  /// The `photo.name` shown to users (photo list, downloaded file name) —
+  /// unlike [_buildFloraFaunaPhotoName] (the storage object path, which
+  /// must stay unique), this can be the plain `flora_fauna_{activityName}_
+  /// {speciesName}` the user actually wants to see, since multiple photo
+  /// rows sharing a display name is harmless.
+  String _buildFloraFaunaDisplayName({
+    required String activityName,
+    required String speciesName,
+    required String sourcePath,
+  }) {
+    final extension = _extractFileExtension(sourcePath);
+    final fallbackExtension = extension.isEmpty ? '.jpg' : extension;
+    final safeActivityName = _sanitizeForFileName(activityName);
+    final safeSpeciesName = _sanitizeForFileName(speciesName);
+    return 'flora_fauna_${safeActivityName}_$safeSpeciesName$fallbackExtension';
   }
 
   Future<String> _uploadFloraFaunaPhotoToSupabase({
@@ -433,30 +481,34 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
 
     setState(() => _isCapturingLocation = true);
     try {
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final result = await LocationCaptureService.capture();
       if (!mounted) return;
 
       setState(() {
         _capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': result.position.latitude,
+          'lng': result.position.longitude,
         });
         _updateAreaFromCoordinates();
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Data updated.'),
-          backgroundColor: Colors.blue,
+        SnackBar(
+          content: Text(
+            result.isFallback
+                ? 'GPS fix timed out — used your last known location. Verify it or retake.'
+                : 'Data updated.',
+          ),
+          backgroundColor: result.isFallback ? Colors.orange : Colors.blue,
         ),
       );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Unable to update data.'),
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -550,10 +602,16 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              icon: Icon(
-                _isCapturingLocation ? Icons.hourglass_top : Icons.my_location,
-                size: 18,
-              ),
+              icon: _isCapturingLocation
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Icon(Icons.my_location, size: 18),
               label:
                   Text(_isCapturingLocation ? 'Capturing...' : 'Capture GPS'),
             ),
@@ -1323,6 +1381,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
         initialScientificName: currentItem?.scientificName,
         initialClassification: currentItem?.classification,
         initialPhotoPath: currentItem?.photoPath,
+        initialExistingPhotoUrl: currentItem?.existingPhotoUrl,
         submitLabel: index == null ? 'Add Species' : 'Update Species',
         onAdd: ({
           required String speciesType,
@@ -1330,6 +1389,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
           required String scientificName,
           String? classification,
           String? photoPath,
+          String? existingPhotoUrl,
         }) {
           setState(() {
             final item = _SpeciesDetail(
@@ -1338,6 +1398,7 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
               scientificName: scientificName,
               classification: classification,
               photoPath: photoPath,
+              existingPhotoUrl: existingPhotoUrl,
             );
             if (index == null) {
               _speciesDetails.add(item);
@@ -1676,6 +1737,8 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
 
         final photoName = _buildFloraFaunaPhotoName(
           surveyId: floraFaunaId,
+          activityName: activityName,
+          speciesName: item.name,
           photoIndex: index,
           sourcePath: photoPath,
         );
@@ -1689,7 +1752,11 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
           projectTypeId: 3,
           activityId: floraFaunaId,
           photoUrl: photoUrl,
-          name: item.name,
+          name: _buildFloraFaunaDisplayName(
+            activityName: activityName,
+            speciesName: item.name,
+            sourcePath: photoPath,
+          ),
         );
       }
 

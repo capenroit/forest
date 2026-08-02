@@ -108,6 +108,7 @@ class _CapizFloraFaunaRecentActivityPageState
           entryType: entryType,
           speciesName: speciesName,
           scientificName: details,
+          areaHectares: (row['area'] as num?)?.toDouble(),
           municipality: municipality,
           barangay: barangay,
           surveyDate: surveyDate,
@@ -140,18 +141,44 @@ class _CapizFloraFaunaRecentActivityPageState
     }
 
     try {
-      final detailRows = await ApiService.getFloraFaunaSurveyDataRows(surveyId);
-      final speciesDetails = detailRows
-          .map((row) => FloraFaunaSpeciesDetail(
-                speciesType: (row['species_type'] ?? '').toString(),
-                name: (row['name'] ?? '').toString(),
-                scientificName: (row['scientific_name'] ?? '').toString(),
-                classification: (row['classification'] as String?)?.trim().isNotEmpty ==
-                        true
-                    ? (row['classification'] as String).trim()
-                    : null,
-              ))
-          .toList();
+      final results = await Future.wait<List<Map<String, dynamic>>>([
+        ApiService.getFloraFaunaSurveyDataRows(surveyId),
+        ApiService.getPhotosForActivity(projectTypeId: 3, activityId: surveyId),
+      ]);
+      final detailRows = results[0];
+      final photoRows = results[1];
+
+      final activityName = (activity.activityName ?? '').trim();
+      final safeActivityName = _sanitizeForFileName(activityName);
+
+      final speciesDetails = detailRows.map((row) {
+        final speciesName = (row['name'] ?? '').toString();
+        final expectedPrefix =
+            'flora_fauna_${safeActivityName}_${_sanitizeForFileName(speciesName)}';
+
+        String? existingPhotoUrl;
+        for (final photo in photoRows) {
+          final photoName = (photo['name'] as String?) ?? '';
+          final withoutExtension = photoName.contains('.')
+              ? photoName.substring(0, photoName.lastIndexOf('.'))
+              : photoName;
+          if (withoutExtension == expectedPrefix) {
+            existingPhotoUrl = (photo['photo_url'] as String?);
+            break;
+          }
+        }
+
+        return FloraFaunaSpeciesDetail(
+          speciesType: (row['species_type'] ?? '').toString(),
+          name: speciesName,
+          scientificName: (row['scientific_name'] ?? '').toString(),
+          classification: (row['classification'] as String?)?.trim().isNotEmpty ==
+                  true
+              ? (row['classification'] as String).trim()
+              : null,
+          existingPhotoUrl: existingPhotoUrl,
+        );
+      }).toList();
 
       if (!mounted) return;
       await _openAddDialog(
@@ -220,6 +247,17 @@ class _CapizFloraFaunaRecentActivityPageState
   String _photoFileName(String url) {
     final base = url.split('/').last;
     return base.isNotEmpty ? base : 'photo.jpg';
+  }
+
+  /// Mirrors the sanitizer in flora_fauna_form.dart used when naming
+  /// species photos (`flora_fauna_{activityName}_{speciesName}`), so a
+  /// species can be matched back to its already-uploaded photo by name.
+  String _sanitizeForFileName(String value) {
+    final sanitized = value
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return sanitized.isEmpty ? 'unnamed' : sanitized;
   }
 
   Future<void> _openAddDialog({FloraFaunaEntry? initialEntry, int? index}) async {

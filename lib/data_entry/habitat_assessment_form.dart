@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/location_capture_service.dart';
 import '../service/lookup_service.dart';
 import '../service/offline_sync_service.dart';
 import '../widget/edit_coordinate_dialog.dart';
@@ -135,6 +136,7 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
           initial.barangay.trim().isEmpty ? null : initial.barangay.trim();
       _selectedDate = initial.date;
       _loadInitialSpecies();
+      _loadInitialCoordinates();
     }
     _dateController.text = _formatDateOnly(_selectedDate);
 
@@ -204,6 +206,72 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
     } finally {
       if (mounted) setState(() => _isLoadingSpecies = false);
     }
+  }
+
+  Future<void> _loadInitialCoordinates() async {
+    final assessmentId = widget.initialData?.id;
+    if (assessmentId == null) return;
+
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await ApiService.getLocationRowsByActivity(
+        activityTypeId: ApiService.habitatAssessmentActivityTypeId,
+        activityId: assessmentId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to load location details: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Photo lookup is best-effort: if it fails (e.g. no connection), the
+    // captured points below should still populate instead of being lost.
+    final photoUrlByLocationId = <int, String>{};
+    try {
+      final photoRows = await ApiService.getPhotosForActivity(
+        projectTypeId: ApiService.habitatAssessmentActivityTypeId,
+        activityId: assessmentId,
+      );
+      for (final photo in photoRows) {
+        final locationId = (photo['location_id'] as num?)?.toInt();
+        final photoUrl = photo['photo_url'] as String?;
+        if (locationId != null && photoUrl != null && photoUrl.isNotEmpty) {
+          photoUrlByLocationId[locationId] = photoUrl;
+        }
+      }
+    } catch (_) {
+      // Ignore — locations still populate below without photo indicators.
+    }
+
+    final loadedCoordinates = rows
+          .map((row) {
+            final lat = (row['latitude'] as num?)?.toDouble();
+            final lng = (row['longitude'] as num?)?.toDouble();
+            final locationId = (row['id'] as num?)?.toInt();
+
+            return <String, dynamic>{
+              'lat': lat,
+              'lng': lng,
+              if (locationId != null) 'locationRowId': locationId,
+              if (locationId != null && photoUrlByLocationId[locationId] != null)
+                'photoUrl': photoUrlByLocationId[locationId],
+            };
+          })
+          .where((row) => row['lat'] != null && row['lng'] != null)
+          .toList();
+
+    if (!mounted) return;
+    setState(() {
+      _capturedCoordinates
+        ..clear()
+        ..addAll(loadedCoordinates);
+      _updateAreaFromCoordinates();
+    });
   }
 
   Future<void> _loadMunicipalityOptions() async {
@@ -336,24 +404,35 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
     setState(() => _isCapturingLocation = true);
 
     try {
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final result = await LocationCaptureService.capture();
 
       if (!mounted) return;
 
       setState(() {
         _capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': result.position.latitude,
+          'lng': result.position.longitude,
         });
         _updateAreaFromCoordinates();
       });
+
+      if (result.isFallback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'GPS fix timed out — used your last known location. Verify it or retake.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Unable to update data.'),
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -410,21 +489,30 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
         return;
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final result = await LocationCaptureService.capture();
 
       if (!mounted) return;
 
       setState(() {
         _capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': result.position.latitude,
+          'lng': result.position.longitude,
           'photoPath': photo.path,
         });
         _updateAreaFromCoordinates();
         _isCapturingLocation = false;
       });
+
+      if (result.isFallback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'GPS fix timed out — used your last known location. Verify it or retake.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
@@ -436,7 +524,9 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Unable to update data.'),
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -460,131 +550,285 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
     }
   }
 
-  void _removeCoordinate(int index) {
+  Future<void> _removeCoordinate(int index) async {
+    final locationRowId = (_capturedCoordinates[index]['locationRowId'] as num?)?.toInt();
+
+    if (locationRowId != null) {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              title: const Text('Remove Point?'),
+              content: const Text(
+                  'This point was already saved. Removing it will delete it from this record.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Remove', style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+
+      if (!confirmed) return;
+
+      try {
+        await ApiService.deleteLocationRow(locationRowId);
+        await ApiService.deletePhotoRowsForLocation(locationRowId);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Unable to remove point: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
     setState(() {
       _capturedCoordinates.removeAt(index);
       _updateAreaFromCoordinates();
     });
   }
 
-  Future<void> _addSpecies() async {
-    final speciesController = TextEditingController();
-    final countController = TextEditingController();
+  Future<Map<String, dynamic>?> _showSpeciesDialog({
+    required String title,
+    required String subtitle,
+    required String submitLabel,
+    String? initialName,
+    int? initialCount,
+  }) {
+    final formKey = GlobalKey<FormState>();
+    final speciesController = TextEditingController(text: initialName ?? '');
+    final countController =
+        TextEditingController(text: initialCount != null ? initialCount.toString() : '');
 
-    final shouldAdd = await showDialog<bool>(
+    InputDecoration fieldDecoration({
+      required String hint,
+      required IconData icon,
+      required Color fillColor,
+      required Color iconColor,
+    }) {
+      return InputDecoration(
+        hintText: hint,
+        filled: true,
+        fillColor: fillColor,
+        prefixIcon: Icon(icon, color: iconColor),
+        contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: Colors.grey.shade200),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: BorderSide(color: Colors.grey.shade200),
+        ),
+        focusedBorder: const OutlineInputBorder(
+          borderRadius: BorderRadius.all(Radius.circular(8)),
+          borderSide: BorderSide(color: Color(0xFF1B8B5E), width: 2),
+        ),
+      );
+    }
+
+    return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          title: const Text('Add Species'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: speciesController,
-                decoration: const InputDecoration(labelText: 'Species Name'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: countController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Count'),
-              ),
-            ],
+        return Dialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          insetPadding: const EdgeInsets.all(16),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.white,
+            ),
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1B8B5E),
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(12),
+                      topRight: Radius.circular(12),
+                    ),
+                  ),
+                  padding: const EdgeInsets.all(18),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.eco, color: Colors.white, size: 24),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                          Text(
+                            subtitle,
+                            style: const TextStyle(fontSize: 11, color: Colors.white70),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Species Name',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: speciesController,
+                          decoration: fieldDecoration(
+                            hint: 'Enter species name',
+                            icon: Icons.spa,
+                            fillColor: Colors.green.shade50,
+                            iconColor: Colors.green.shade600,
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Species name is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Count',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.grey.shade700,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextFormField(
+                          controller: countController,
+                          keyboardType: TextInputType.number,
+                          decoration: fieldDecoration(
+                            hint: 'Enter count',
+                            icon: Icons.tag_rounded,
+                            fillColor: Colors.blue.shade50,
+                            iconColor: Colors.blue.shade600,
+                          ),
+                          validator: (value) {
+                            final count = int.tryParse((value ?? '').trim());
+                            if (count == null || count <= 0) {
+                              return 'Enter a valid count';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(dialogContext),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () {
+                            if (!formKey.currentState!.validate()) return;
+                            Navigator.pop(dialogContext, {
+                              'name': speciesController.text.trim(),
+                              'count': int.parse(countController.text.trim()),
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1B8B5E),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          child: Text(submitLabel),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Add'),
-            ),
-          ],
         );
       },
     );
+  }
 
-    if (shouldAdd != true) return;
-
-    final name = speciesController.text.trim();
-    final count = int.tryParse(countController.text.trim()) ?? 0;
-
-    if (name.isEmpty || count <= 0) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid species and count.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
+  Future<void> _addSpecies() async {
+    final result = await _showSpeciesDialog(
+      title: 'Add Species',
+      subtitle: 'Set species name and count',
+      submitLabel: 'Add',
+    );
+    if (result == null) return;
 
     setState(() {
-      _species.add(HabitatSpeciesEntry(speciesName: name, count: count));
+      _species.add(HabitatSpeciesEntry(
+        speciesName: result['name'] as String,
+        count: result['count'] as int,
+      ));
     });
   }
 
   Future<void> _editSpecies(int index) async {
     final item = _species[index];
-    final speciesController = TextEditingController(text: item.speciesName);
-    final countController = TextEditingController(text: item.count.toString());
-
-    final shouldSave = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          title: const Text('Edit Species'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: speciesController,
-                decoration: const InputDecoration(labelText: 'Species Name'),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: countController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: 'Count'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
+    final result = await _showSpeciesDialog(
+      title: 'Edit Species',
+      subtitle: 'Update species name and count',
+      submitLabel: 'Save',
+      initialName: item.speciesName,
+      initialCount: item.count,
     );
-
-    if (shouldSave != true) return;
-
-    final name = speciesController.text.trim();
-    final count = int.tryParse(countController.text.trim()) ?? 0;
-
-    if (name.isEmpty || count <= 0) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid species and count.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      return;
-    }
+    if (result == null) return;
 
     setState(() {
-      _species[index] = HabitatSpeciesEntry(speciesName: name, count: count);
+      _species[index] = HabitatSpeciesEntry(
+        speciesName: result['name'] as String,
+        count: result['count'] as int,
+      );
     });
   }
 
@@ -847,14 +1091,31 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
       }
 
       if (assessmentId != null && _capturedCoordinates.isNotEmpty) {
-        await ApiService.saveLocationRowsForActivity(
-          activityId: assessmentId,
-          coordinates: _capturedCoordinates,
-          activityTypeId: ApiService.habitatAssessmentActivityTypeId,
-        );
-
         for (final coord in _capturedCoordinates) {
+          final latitude = (coord['lat'] as num?)?.toDouble();
+          final longitude = (coord['lng'] as num?)?.toDouble();
+          if (latitude == null || longitude == null) continue;
+
           final photoPath = coord['photoPath'] as String?;
+          int? locationId = (coord['locationRowId'] as num?)?.toInt();
+
+          if (locationId != null) {
+            await ApiService.updateLocationRowCoordinates(
+              locationId: locationId,
+              latitude: latitude,
+              longitude: longitude,
+            );
+          } else {
+            final createdRow = await ApiService.createLocationRow(
+              activityId: assessmentId,
+              activityTypeId: ApiService.habitatAssessmentActivityTypeId,
+              latitude: latitude,
+              longitude: longitude,
+            );
+            locationId = (createdRow['id'] as num?)?.toInt();
+            coord['locationRowId'] = locationId;
+          }
+
           if (photoPath == null || photoPath.isEmpty) continue;
 
           final extension = _extractFileExtension(photoPath);
@@ -870,7 +1131,11 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
             projectTypeId: ApiService.habitatAssessmentActivityTypeId,
             activityId: assessmentId,
             photoUrl: supabasePhotoUrl,
+            locationId: locationId,
           );
+
+          coord['photoPath'] = null;
+          coord['photoUrl'] = supabasePhotoUrl;
         }
       }
 
@@ -1551,6 +1816,9 @@ class _HabitatAssessmentFormState extends State<HabitatAssessmentForm> {
                                                         null ||
                                                     _capturedCoordinates[i][
                                                             'stablePhotoPath'] !=
+                                                        null ||
+                                                    _capturedCoordinates[i][
+                                                            'photoUrl'] !=
                                                         null)
                                                   Padding(
                                                     padding: const EdgeInsets.only(top: 4),

@@ -5,6 +5,7 @@ import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/offline_sync_service.dart';
+import '../widget/activity_photos_dialog.dart';
 import '../widget/side_panel.dart';
 
 class MarineProtectedAreaPage extends StatefulWidget {
@@ -14,7 +15,7 @@ class MarineProtectedAreaPage extends StatefulWidget {
   State<MarineProtectedAreaPage> createState() => _MarineProtectedAreaPageState();
 }
 
-enum _ActivityCardMenuAction { edit, delete }
+enum _ActivityCardMenuAction { photos, edit, delete }
 
 class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
   final List<MarineProtectedArea> _items = [];
@@ -356,6 +357,47 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
         );
       },
     );
+  }
+
+  Future<void> _viewPhotos(MarineProtectedArea area) async {
+    final areaId = area.id;
+    if (areaId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No photos available for this activity.')),
+      );
+      return;
+    }
+
+    await showActivityPhotosDialog(
+      context: context,
+      title: 'Photos — ${area.name.trim().isEmpty ? 'Marine Protected Area' : area.name.trim()}',
+      loadPhotos: () => _loadPhotosForActivity(areaId),
+    );
+  }
+
+  Future<List<ActivityPhoto>> _loadPhotosForActivity(int areaId) async {
+    final photos = <ActivityPhoto>[];
+
+    final photoRows = await ApiService.getPhotosForActivity(
+      projectTypeId: ApiService.marineProtectedAreaActivityTypeId,
+      activityId: areaId,
+    );
+    for (final row in photoRows) {
+      final url = (row['photo_url'] ?? '').toString();
+      if (url.isEmpty) continue;
+      final name = (row['name'] as String?)?.trim();
+      photos.add(ActivityPhoto(
+        url: url,
+        name: (name != null && name.isNotEmpty) ? name : _photoFileName(url),
+      ));
+    }
+
+    return photos;
+  }
+
+  String _photoFileName(String url) {
+    final base = url.split('/').last;
+    return base.isNotEmpty ? base : 'photo.jpg';
   }
 
   String _formatDate(DateTime date) {
@@ -721,6 +763,9 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 onSelected: (action) {
+                  if (action == _ActivityCardMenuAction.photos) {
+                    _viewPhotos(area);
+                  }
                   if (action == _ActivityCardMenuAction.edit) {
                     _editActivity(area);
                   }
@@ -729,6 +774,10 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
                   }
                 },
                 itemBuilder: (context) => [
+                  const PopupMenuItem<_ActivityCardMenuAction>(
+                    value: _ActivityCardMenuAction.photos,
+                    child: Text('Photos'),
+                  ),
                   const PopupMenuItem<_ActivityCardMenuAction>(
                     value: _ActivityCardMenuAction.edit,
                     child: Text('Edit'),

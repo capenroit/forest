@@ -84,18 +84,45 @@ class _ActivityPhotosDialogState extends State<_ActivityPhotosDialog> {
 
       if (kIsWeb) {
         web_helper.downloadBytes(bytes, '$baseName.$ext', 'image/$ext');
-      } else {
+        if (!silent && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Downloaded ${photo.name}')),
+          );
+        }
+        return;
+      }
+
+      if (silent) {
+        // Bulk "Download All" — save straight to the default location so
+        // the user isn't hit with a save-location picker per photo.
         await FileSaver.instance.saveFile(
           name: baseName,
           bytes: bytes,
           ext: ext,
           mimeType: _mimeTypeFor(ext),
         );
+        return;
       }
 
-      if (!silent && mounted) {
+      // A single photo download: same "Save As" picker + confirmed path as
+      // the Excel/map export flows, so the user knows exactly where it went.
+      final savedPath = await FileSaver.instance.saveAs(
+        name: baseName,
+        bytes: bytes,
+        ext: ext,
+        mimeType: _mimeTypeFor(ext),
+      );
+
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Downloaded ${photo.name}')),
+          SnackBar(
+            content: Text(
+              savedPath != null
+                  ? 'Saved to $savedPath'
+                  : 'Downloaded ${photo.name}',
+            ),
+            duration: const Duration(seconds: 6),
+          ),
         );
       }
     } catch (e) {

@@ -5,6 +5,7 @@ import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/offline_sync_service.dart';
+import '../widget/activity_photos_dialog.dart';
 import '../widget/side_panel.dart';
 
 class HabitatAssessmentPage extends StatefulWidget {
@@ -26,7 +27,7 @@ class _HabitatActivityItem {
   });
 }
 
-enum _ActivityCardMenuAction { edit, delete }
+enum _ActivityCardMenuAction { photos, edit, delete }
 
 class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
   final List<_HabitatActivityItem> _items = [];
@@ -395,6 +396,47 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
         );
       },
     );
+  }
+
+  Future<void> _viewPhotos(HabitatAssessment assessment) async {
+    final assessmentId = assessment.id;
+    if (assessmentId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No photos available for this activity.')),
+      );
+      return;
+    }
+
+    await showActivityPhotosDialog(
+      context: context,
+      title: 'Photos — ${assessment.typeAssessment.trim().isEmpty ? 'Habitat Assessment' : assessment.typeAssessment.trim()}',
+      loadPhotos: () => _loadPhotosForActivity(assessmentId),
+    );
+  }
+
+  Future<List<ActivityPhoto>> _loadPhotosForActivity(int assessmentId) async {
+    final photos = <ActivityPhoto>[];
+
+    final photoRows = await ApiService.getPhotosForActivity(
+      projectTypeId: ApiService.habitatAssessmentActivityTypeId,
+      activityId: assessmentId,
+    );
+    for (final row in photoRows) {
+      final url = (row['photo_url'] ?? '').toString();
+      if (url.isEmpty) continue;
+      final name = (row['name'] as String?)?.trim();
+      photos.add(ActivityPhoto(
+        url: url,
+        name: (name != null && name.isNotEmpty) ? name : _photoFileName(url),
+      ));
+    }
+
+    return photos;
+  }
+
+  String _photoFileName(String url) {
+    final base = url.split('/').last;
+    return base.isNotEmpty ? base : 'photo.jpg';
   }
 
   String _formatDate(DateTime date) {
@@ -768,6 +810,9 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 onSelected: (action) {
+                  if (action == _ActivityCardMenuAction.photos) {
+                    _viewPhotos(assessment);
+                  }
                   if (action == _ActivityCardMenuAction.edit) {
                     _editActivity(assessment);
                   }
@@ -776,6 +821,10 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
                   }
                 },
                 itemBuilder: (context) => [
+                  const PopupMenuItem<_ActivityCardMenuAction>(
+                    value: _ActivityCardMenuAction.photos,
+                    child: Text('Photos'),
+                  ),
                   const PopupMenuItem<_ActivityCardMenuAction>(
                     value: _ActivityCardMenuAction.edit,
                     child: Text('Edit'),

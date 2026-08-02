@@ -10,6 +10,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'activity_model.dart';
 import 'api_service.dart';
+import 'lookup_service.dart';
+import 'seedling_list_service.dart';
 
 class OfflineSyncService {
   static const String _queueFileName = 'offline_queue.json';
@@ -421,6 +423,64 @@ class OfflineSyncService {
     }
   }
 
+  // ─── Warm cache — proactive offline readiness ──────────────────────────────
+  //
+  // Pulls reference/lookup data and recent activities into local caches
+  // right after a successful online login, so the device has something to
+  // work with if it goes offline afterward. Callers should fire this in the
+  // background (`.ignore()`) — nothing here blocks, and every piece is
+  // best-effort: one failure never stops the rest from running.
+
+  static Future<void> warmCache() async {
+    await Future.wait([
+      _safely(() => LookupService.getMunicipalityOptions(refresh: true)),
+      _safely(() => LookupService.getFloraClassificationOptions()),
+      _safely(() => LookupService.getFaunaClassificationOptions()),
+      _safely(() => LookupService.getProjectTypeOptions(refresh: true)),
+      _safely(() => LookupService.getNurseryRows(refresh: true)),
+      _safely(() => SeedlingListService().getSeedlingNames()),
+      _safely(() => ApiService.getMangroveSpeciesNames()),
+      _safely(_warmTreeGrowingCache),
+    ]);
+  }
+
+  static Future<void> _safely(Future<dynamic> Function() action) async {
+    try {
+      await action();
+    } catch (_) {
+      // Best effort — one failed table shouldn't stop the rest of warmCache.
+    }
+  }
+
+  /// Caches the most recent tree-growing and mangrove-planting activities
+  /// (same 200-row window Recent Activity already shows online) plus their
+  /// per-seedling rows, so the survival-monitoring pickers have something to
+  /// offer offline even for activities this device has never opened before.
+  static Future<void> _warmTreeGrowingCache() async {
+    for (final projectTypeId in [_treeGrowingActivityTypeId, 6]) {
+      try {
+        final activities = await ApiService.getTreePlantingsByProjectTypeId(
+          projectTypeId,
+          limit: 200,
+        );
+        await cacheActivities(projectTypeId, activities);
+
+        final seqIds =
+            activities.map((a) => a.seqId).whereType<int>().toList();
+        if (seqIds.isEmpty) continue;
+
+        final grouped = await ApiService.getTreeGrowingDataByTreeGrowingIds(
+          seqIds,
+        );
+        for (final entry in grouped.entries) {
+          await cacheSeedRows(entry.key, entry.value);
+        }
+      } catch (_) {
+        // Best effort per project type — leave the previous cache in place.
+      }
+    }
+  }
+
   // ─── Sync dispatch ────────────────────────────────────────────────────────
 
   /// Push all queued records to Supabase.
@@ -525,6 +585,14 @@ class OfflineSyncService {
       final projectTypeId = planting.projectTypeId ?? _treeGrowingActivityTypeId;
       final storageFolder =
           _storageFolderByProjectType[projectTypeId] ?? 'tree_growing';
+      // Display-name prefix: 'tree_growing' for project type 1, 'mangrove'
+      // for project type 6 — matches the naming used on the online save
+      // path in tree_growing_form.dart / mangrove_planting_form.dart.
+      final displayPrefix =
+          projectTypeId == 6 ? 'mangrove' : 'tree_growing';
+      final safeActivityName =
+          _sanitizeForFileName((planting.activityName ?? '').trim());
+      var photoCounter = 0;
 
       for (final coord in coordinates) {
         final lat = (coord['lat'] as num?)?.toDouble();
@@ -546,6 +614,9 @@ class OfflineSyncService {
           final ext = _extensionOf(stablePath);
           final photoName =
               'photo_000_${divisionTypeId}_${projectTypeId}_${activityId}_$locationId.$ext';
+          photoCounter++;
+          final displayName =
+              '${displayPrefix}_${safeActivityName}_Point$photoCounter.$ext';
 
           await _uploadQueuedPhoto(
             stablePath: stablePath,
@@ -553,6 +624,8 @@ class OfflineSyncService {
             photoName: photoName,
             projectTypeId: projectTypeId,
             activityId: activityId,
+            displayName: displayName,
+            locationId: locationId,
           );
         }
       }
@@ -626,13 +699,24 @@ class OfflineSyncService {
       rows: species,
     );
 
+    final activityName =
+        (survey['activityName'] as String?)?.trim() ?? '';
+    final safeActivityName = _sanitizeForFileName(activityName);
+
     for (var i = 0; i < species.length; i++) {
       final stablePath = species[i]['stablePhotoPath'] as String?;
       if (stablePath == null || stablePath.isEmpty) continue;
 
+      final speciesName = (species[i]['name'] as String?)?.trim() ?? '';
+      final safeSpeciesName = _sanitizeForFileName(speciesName);
       final ext = _extensionOf(stablePath);
+      // Storage name stays unique (photo rows are inserted with upsert
+      // disabled); the display name is the plain flora_fauna_{activity}_
+      // {species} the user actually sees.
       final photoName =
-          'flora_fauna_${surveyId}_${DateTime.now().millisecondsSinceEpoch}_${i + 1}.$ext';
+          'flora_fauna_${safeActivityName}_${safeSpeciesName}_'
+          '${DateTime.now().millisecondsSinceEpoch}_${i + 1}.$ext';
+      final displayName = 'flora_fauna_${safeActivityName}_$safeSpeciesName.$ext';
 
       await _uploadQueuedPhoto(
         stablePath: stablePath,
@@ -640,6 +724,7 @@ class OfflineSyncService {
         photoName: photoName,
         projectTypeId: projectTypeId,
         activityId: surveyId,
+        displayName: displayName,
       );
     }
 
@@ -788,6 +873,8 @@ class OfflineSyncService {
     required String photoName,
     required int projectTypeId,
     required int activityId,
+    String? displayName,
+    int? locationId,
   }) async {
     final photoFile = File(stablePath);
     if (!await photoFile.exists()) return;
@@ -813,12 +900,27 @@ class OfflineSyncService {
       projectTypeId: projectTypeId,
       activityId: activityId,
       photoUrl: photoUrl,
+      name: displayName,
+      locationId: locationId,
     );
 
     // Clean up the stable local file after a successful upload.
     try {
       await photoFile.delete();
     } catch (_) {}
+  }
+
+  /// Storage object paths (and, indirectly, filenames derived from them)
+  /// can't safely contain spaces, slashes, or other punctuation from
+  /// free-text fields — keep only alphanumerics, folding everything else
+  /// down to a single underscore. Mirrors the form-side helper of the same
+  /// name in flora_fauna_form.dart.
+  static String _sanitizeForFileName(String value) {
+    final sanitized = value
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return sanitized.isEmpty ? 'unnamed' : sanitized;
   }
 
   static String _extensionOf(String path) {

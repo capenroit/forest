@@ -5,6 +5,7 @@ import 'screens/login_screen.dart';
 import 'home_screen.dart';
 import 'service/api_service.dart';
 import 'service/auth_session.dart';
+import 'service/offline_sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -59,6 +60,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         final profile = AppUser.fromJson(profileData, id: userId);
         AuthSession.currentUser = profile;
         await AuthSession.cacheUser(profile);
+        // Reaching here proves we're online — warm the offline caches in
+        // the background so the app has something to work with if
+        // connectivity drops later. Never blocks the dashboard.
+        OfflineSyncService.warmCache().ignore();
         return;
       }
     } catch (_) {

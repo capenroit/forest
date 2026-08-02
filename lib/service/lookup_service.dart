@@ -34,6 +34,8 @@ class LookupService {
   static final Map<int, List<LookupOption>> _cachedBarangayOptionsByMunicipality = {};
   static List<LookupOption> _cachedFloraClassificationOptions = [];
   static List<LookupOption> _cachedFaunaClassificationOptions = [];
+  static List<LookupOption> _cachedProjectTypeOptions = [];
+  static List<Map<String, dynamic>> _cachedNurseryRows = [];
   static bool _diskCacheLoaded = false;
 
   static void _sortMunicipalityOptionsWithIdOneFirst() {
@@ -113,6 +115,24 @@ class LookupService {
                   ))
               .toList();
         }
+
+        final projectTypes = decoded['project_types'];
+        if (projectTypes is List) {
+          _cachedProjectTypeOptions = projectTypes
+              .whereType<Map>()
+              .map((item) => LookupOption.fromJson(
+                    Map<String, dynamic>.from(item),
+                  ))
+              .toList();
+        }
+
+        final nurseryRows = decoded['nursery_rows'];
+        if (nurseryRows is List) {
+          _cachedNurseryRows = nurseryRows
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList();
+        }
       }
     } catch (_) {
       // Ignore disk cache parsing errors and fall back to network or empty state.
@@ -141,6 +161,10 @@ class LookupService {
         'fauna_classifications': _cachedFaunaClassificationOptions
             .map((option) => option.toJson())
             .toList(),
+        'project_types': _cachedProjectTypeOptions
+            .map((option) => option.toJson())
+            .toList(),
+        'nursery_rows': _cachedNurseryRows,
       };
       await file.writeAsString(jsonEncode(payload));
     } catch (_) {
@@ -323,6 +347,71 @@ class LookupService {
     }
   }
 
+  static Future<List<LookupOption>> getProjectTypeOptions({
+    bool refresh = false,
+  }) async {
+    await _loadDiskCache();
+
+    if (!refresh && _cachedProjectTypeOptions.isNotEmpty) {
+      return _cachedProjectTypeOptions;
+    }
+
+    try {
+      final response = await _supabase
+          .from('project_type')
+          .select('id, projectname')
+          .order('id', ascending: true);
+
+      _cachedProjectTypeOptions = (response as List<dynamic>)
+          .map(
+            (row) => LookupOption(
+              id: (row['id'] as num).toInt(),
+              name: (row['projectname'] as String).trim(),
+            ),
+          )
+          .where((option) => option.name.isNotEmpty)
+          .toList();
+
+      await _persistDiskCache();
+      return _cachedProjectTypeOptions;
+    } catch (_) {
+      // Offline or Supabase unavailable: fall back to whatever was cached
+      // from the last successful fetch.
+      return _cachedProjectTypeOptions;
+    }
+  }
+
+  /// Raw seedling_nursery rows (seq_id, name, description, div_type) —
+  /// kept as maps rather than [LookupOption] since callers need the extra
+  /// fields, not just id/name.
+  static Future<List<Map<String, dynamic>>> getNurseryRows({
+    bool refresh = false,
+  }) async {
+    await _loadDiskCache();
+
+    if (!refresh && _cachedNurseryRows.isNotEmpty) {
+      return _cachedNurseryRows;
+    }
+
+    try {
+      final response = await _supabase
+          .from('seedling_nursery')
+          .select('seq_id, name, description, div_type')
+          .order('name', ascending: true);
+
+      _cachedNurseryRows = (response as List<dynamic>)
+          .map((row) => Map<String, dynamic>.from(row as Map))
+          .toList();
+
+      await _persistDiskCache();
+      return _cachedNurseryRows;
+    } catch (_) {
+      // Offline or Supabase unavailable: fall back to whatever was cached
+      // from the last successful fetch.
+      return _cachedNurseryRows;
+    }
+  }
+
   static Future<List<LookupOption>> getBarangayOptionsByMunicipalityId(
     int municipalityId, {
     bool refresh = false,
@@ -360,6 +449,8 @@ class LookupService {
     _cachedBarangayOptionsByMunicipality.clear();
     _cachedFloraClassificationOptions = [];
     _cachedFaunaClassificationOptions = [];
+    _cachedProjectTypeOptions = [];
+    _cachedNurseryRows = [];
     _diskCacheLoaded = false;
 
     _cacheFile().then((file) {

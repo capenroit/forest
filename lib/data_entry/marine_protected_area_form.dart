@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../service/activity_model.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/location_capture_service.dart';
 import '../service/lookup_service.dart';
 import '../service/offline_sync_service.dart';
 import '../widget/edit_coordinate_dialog.dart';
@@ -106,6 +107,7 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       _selectedBarangay =
           initial.barangay.trim().isEmpty ? null : initial.barangay.trim();
       _selectedDate = initial.date;
+      _loadInitialCoordinates();
     }
     _dateController.text = _formatDateOnly(_selectedDate);
 
@@ -142,6 +144,72 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
         _dateController.text = _formatDateOnly(picked);
       });
     }
+  }
+
+  Future<void> _loadInitialCoordinates() async {
+    final areaId = widget.initialData?.id;
+    if (areaId == null) return;
+
+    List<Map<String, dynamic>> rows;
+    try {
+      rows = await ApiService.getLocationRowsByActivity(
+        activityTypeId: ApiService.marineProtectedAreaActivityTypeId,
+        activityId: areaId,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Unable to load location details: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    // Photo lookup is best-effort: if it fails (e.g. no connection), the
+    // captured points below should still populate instead of being lost.
+    final photoUrlByLocationId = <int, String>{};
+    try {
+      final photoRows = await ApiService.getPhotosForActivity(
+        projectTypeId: ApiService.marineProtectedAreaActivityTypeId,
+        activityId: areaId,
+      );
+      for (final photo in photoRows) {
+        final locationId = (photo['location_id'] as num?)?.toInt();
+        final photoUrl = photo['photo_url'] as String?;
+        if (locationId != null && photoUrl != null && photoUrl.isNotEmpty) {
+          photoUrlByLocationId[locationId] = photoUrl;
+        }
+      }
+    } catch (_) {
+      // Ignore — locations still populate below without photo indicators.
+    }
+
+    final loadedCoordinates = rows
+        .map((row) {
+          final lat = (row['latitude'] as num?)?.toDouble();
+          final lng = (row['longitude'] as num?)?.toDouble();
+          final locationId = (row['id'] as num?)?.toInt();
+
+          return <String, dynamic>{
+            'lat': lat,
+            'lng': lng,
+            if (locationId != null) 'locationRowId': locationId,
+            if (locationId != null && photoUrlByLocationId[locationId] != null)
+              'photoUrl': photoUrlByLocationId[locationId],
+          };
+        })
+        .where((row) => row['lat'] != null && row['lng'] != null)
+        .toList();
+
+    if (!mounted) return;
+    setState(() {
+      _capturedCoordinates
+        ..clear()
+        ..addAll(loadedCoordinates);
+      _updateAreaFromCoordinates();
+    });
   }
 
   Future<void> _loadMunicipalityOptions() async {
@@ -281,24 +349,35 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     setState(() => _isCapturingLocation = true);
 
     try {
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final result = await LocationCaptureService.capture();
 
       if (!mounted) return;
 
       setState(() {
         _capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': result.position.latitude,
+          'lng': result.position.longitude,
         });
         _updateAreaFromCoordinates();
       });
+
+      if (result.isFallback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'GPS fix timed out — used your last known location. Verify it or retake.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Unable to update data.'),
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -355,21 +434,30 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
         return;
       }
 
-      final position = await Geolocator.getCurrentPosition(
-        timeLimit: const Duration(seconds: 10),
-      );
+      final locationResult = await LocationCaptureService.capture();
 
       if (!mounted) return;
 
       setState(() {
         _capturedCoordinates.add({
-          'lat': position.latitude,
-          'lng': position.longitude,
+          'lat': locationResult.position.latitude,
+          'lng': locationResult.position.longitude,
           'photoPath': photo.path,
         });
         _updateAreaFromCoordinates();
         _isCapturingLocation = false;
       });
+
+      if (locationResult.isFallback) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'GPS fix timed out — used your last known location. Verify it or retake.',
+            ),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
     } catch (e) {
       await SystemChrome.setPreferredOrientations([
         DeviceOrientation.landscapeLeft,
@@ -381,7 +469,9 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Unable to update data.'),
+          content: Text(
+            'Unable to get GPS location. Move to an open area and try again.',
+          ),
           backgroundColor: Colors.red,
         ),
       );
@@ -405,7 +495,49 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
     }
   }
 
-  void _removeCoordinate(int index) {
+  Future<void> _removeCoordinate(int index) async {
+    final locationRowId = (_capturedCoordinates[index]['locationRowId'] as num?)?.toInt();
+
+    if (locationRowId != null) {
+      final confirmed = await showDialog<bool>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              title: const Text('Remove Point?'),
+              content: const Text(
+                  'This point was already saved. Removing it will delete it from this record.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(true),
+                  child: const Text('Remove', style: TextStyle(color: Colors.red)),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+
+      if (!confirmed) return;
+
+      try {
+        await ApiService.deleteLocationRow(locationRowId);
+        await ApiService.deletePhotoRowsForLocation(locationRowId);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Unable to remove point: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+    }
+
+    if (!mounted) return;
     setState(() {
       _capturedCoordinates.removeAt(index);
       _updateAreaFromCoordinates();
@@ -610,14 +742,31 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
       final areaId = (savedArea['id'] as num?)?.toInt();
 
       if (areaId != null && _capturedCoordinates.isNotEmpty) {
-        await ApiService.saveLocationRowsForActivity(
-          activityId: areaId,
-          coordinates: _capturedCoordinates,
-          activityTypeId: ApiService.marineProtectedAreaActivityTypeId,
-        );
-
         for (final coord in _capturedCoordinates) {
+          final latitude = (coord['lat'] as num?)?.toDouble();
+          final longitude = (coord['lng'] as num?)?.toDouble();
+          if (latitude == null || longitude == null) continue;
+
           final photoPath = coord['photoPath'] as String?;
+          int? locationId = (coord['locationRowId'] as num?)?.toInt();
+
+          if (locationId != null) {
+            await ApiService.updateLocationRowCoordinates(
+              locationId: locationId,
+              latitude: latitude,
+              longitude: longitude,
+            );
+          } else {
+            final createdRow = await ApiService.createLocationRow(
+              activityId: areaId,
+              activityTypeId: ApiService.marineProtectedAreaActivityTypeId,
+              latitude: latitude,
+              longitude: longitude,
+            );
+            locationId = (createdRow['id'] as num?)?.toInt();
+            coord['locationRowId'] = locationId;
+          }
+
           if (photoPath == null || photoPath.isEmpty) continue;
 
           final extension = _extractFileExtension(photoPath);
@@ -633,7 +782,11 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
             projectTypeId: ApiService.marineProtectedAreaActivityTypeId,
             activityId: areaId,
             photoUrl: supabasePhotoUrl,
+            locationId: locationId,
           );
+
+          coord['photoPath'] = null;
+          coord['photoUrl'] = supabasePhotoUrl;
         }
       }
 
@@ -1120,7 +1273,8 @@ class _MarineProtectedAreaFormState extends State<MarineProtectedAreaForm> {
                                                     fontSize: 11,
                                                   ),
                                                 ),
-                                                if (_capturedCoordinates[i]['photoPath'] != null)
+                                                if (_capturedCoordinates[i]['photoPath'] != null ||
+                                                    _capturedCoordinates[i]['photoUrl'] != null)
                                                   Padding(
                                                     padding: const EdgeInsets.only(top: 4),
                                                     child: Text(

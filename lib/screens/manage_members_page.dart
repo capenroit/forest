@@ -49,7 +49,7 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
 
     try {
       final rows = await Supabase.instance.client
-          .from('users_with_confirmation')
+          .from('users')
           .select(
               'id, seq_id, name, email, status, access_level, division_type_id, created_at, email_confirmed')
           .order('created_at', ascending: false);
