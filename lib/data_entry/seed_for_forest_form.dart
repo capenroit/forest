@@ -210,12 +210,14 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
   Future<void> _loadNurseryOptions() async {
     setState(() => _isLoadingNurseries = true);
     try {
-      // This dropdown only applies to the division-2 (CRM) propagation
-      // quick-add flow, so only that division's nurseries are offered.
+      // Offer only the nurseries belonging to this dialog's own division —
+      // mangrove (CRM, div_type 2) vs. forest (FMS, div_type 1) — matching
+      // useMangroveSpeciesList, which the caller already sets based on the
+      // current user's division.
       final rows = await _supabase
           .from('seedling_nursery')
           .select('seq_id, name')
-          .eq('div_type', 2);
+          .eq('div_type', widget.useMangroveSpeciesList ? 2 : 1);
 
       final options = (rows as List<dynamic>)
           .map((row) => LookupOption(

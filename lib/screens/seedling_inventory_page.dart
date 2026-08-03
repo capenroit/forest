@@ -358,9 +358,12 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // CRM (division 2) can add seedling stock directly instead of
-            // going through the donation-propagation flow.
-            if (AuthSession.currentUser?.divisionTypeId == 2) ...[
+            // FMS (division 1) and CRM (division 2) can both add seedling
+            // stock directly instead of going through the donation-
+            // propagation flow — the dialog itself picks mangrove vs. forest
+            // species based on the current user's division.
+            if (AuthSession.currentUser?.divisionTypeId == 1 ||
+                AuthSession.currentUser?.divisionTypeId == 2) ...[
               Container(
                 decoration: BoxDecoration(
                   color: const Color.fromARGB(255, 200, 230, 220),
@@ -937,6 +940,8 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
   }
 
   Future<void> _openAddPropagationDialog() async {
+    final isCoastal = AuthSession.currentUser?.divisionTypeId == 2;
+
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -948,9 +953,9 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         child: SeedForForestForm(
           donorFieldLabel: 'Propagated By',
           showNurseryField: true,
-          formTitle: 'Mangrove Data Entry',
+          formTitle: isCoastal ? 'Mangrove Data Entry' : 'Forest Data Entry',
           formSubtitle: 'Record propagation and seed list details',
-          useMangroveSpeciesList: true,
+          useMangroveSpeciesList: isCoastal,
           onSave: (entry) {
             Navigator.pop(dialogContext);
             if (!mounted) return;
