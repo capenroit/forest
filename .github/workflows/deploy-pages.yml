@@ -23,9 +23,15 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
       - run: flutter pub get
       - run: flutter build web --release --base-href /forest/
+
+      # Pages has no SPA rewrite rule (unlike the Netlify config), so any URL
+      # it can't resolve to a file hard-404s. Serving index.html as the 404
+      # page lets the app boot and route itself instead.
+      - run: cp build/web/index.html build/web/404.html
 
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -112,8 +112,8 @@ class _LoginScreenState extends State<LoginScreen> {
   /// Where Supabase should send the user after they click the recovery link
   /// in their email.
   ///
-  /// On web that is simply the deployed app's own origin. On mobile it is a
-  /// custom scheme that Android routes back into this app (see the
+  /// On web this is the directory the app is actually served from. On mobile
+  /// it is a custom scheme that Android routes back into this app (see the
   /// intent-filter in AndroidManifest.xml); supabase_flutter picks the link
   /// up and emits [AuthChangeEvent.passwordRecovery], which main.dart turns
   /// into a push to ResetPasswordScreen.
@@ -121,8 +121,19 @@ class _LoginScreenState extends State<LoginScreen> {
   /// Both values must be listed under Authentication → URL Configuration →
   /// Redirect URLs in the Supabase dashboard, or the link comes back as
   /// "requested path is invalid".
-  static String get passwordResetRedirect =>
-      kIsWeb ? '${Uri.base.origin}/' : 'com.example.tablet01://reset-password';
+  static String get passwordResetRedirect {
+    if (!kIsWeb) return 'com.example.tablet01://reset-password';
+
+    // Keep the path, don't just use Uri.base.origin: on GitHub Pages the app
+    // is served from a sub-path (/forest/), and the origin alone would send
+    // the user to the domain root, which is not this app. Trim any filename
+    // and drop the query/fragment so the link is stable enough to sit in
+    // Supabase's redirect allow-list.
+    final path = Uri.base.path;
+    final directory =
+        path.endsWith('/') ? path : path.substring(0, path.lastIndexOf('/') + 1);
+    return '${Uri.base.origin}$directory';
+  }
 
   Future<void> _handleForgotPassword() async {
     final controller =
