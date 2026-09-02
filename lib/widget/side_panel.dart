@@ -156,7 +156,7 @@ class _SidePanelState extends State<SidePanel> {
                     ),
                     const SizedBox(width: 12),
                     const Text(
-                      "EnviApp",
+                      "iForest",
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 22,

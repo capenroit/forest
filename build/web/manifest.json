@@ -1,11 +1,11 @@
 {
-    "name": "tablet01",
-    "short_name": "tablet01",
-    "start_url": "/",
+    "name": "iForest",
+    "short_name": "iForest",
+    "start_url": ".",
     "display": "standalone",
     "background_color": "#ffffff",
     "theme_color": "#1B8B5E",
-    "description": "A new Flutter project.",
+    "description": "Forest and coastal resource management.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

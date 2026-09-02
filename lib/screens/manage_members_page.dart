@@ -29,6 +29,16 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
     return level == 1 || level == 2;
   }
 
+  /// access_level 1 manages every account in the app. access_level 2 is a
+  /// division manager: they only ever see and act on members of their own
+  /// division.
+  bool get _isDivisionScoped => AuthSession.currentUser?.accessLevel == 2;
+
+  /// The division a scoped manager is limited to, or null when the current
+  /// user manages every division.
+  int? get _scopedDivisionTypeId =>
+      _isDivisionScoped ? AuthSession.currentUser?.divisionTypeId : null;
+
   @override
   void initState() {
     super.initState();
@@ -47,12 +57,32 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
       });
     }
 
+    final scopedDivisionId = _scopedDivisionTypeId;
+    if (_isDivisionScoped && scopedDivisionId == null) {
+      // A division manager whose own division is unknown has nothing they're
+      // allowed to manage. Bail out rather than falling through to the
+      // unscoped query, which would show them every division.
+      if (!mounted) return;
+      setState(() {
+        _members = [];
+        _isLoading = false;
+      });
+      return;
+    }
+
     try {
-      final rows = await Supabase.instance.client
-          .from('users')
-          .select(
-              'id, seq_id, name, email, status, access_level, division_type_id, created_at, email_confirmed')
-          .order('created_at', ascending: false);
+      var query = Supabase.instance.client.from('users').select(
+          'id, seq_id, name, email, status, access_level, division_type_id, created_at, email_confirmed');
+
+      // Filtered in the query rather than in the .where() chain below so
+      // out-of-division rows never reach the device at all. The matching RLS
+      // policy (restrict_level2_admin_to_own_division.sql) is what actually
+      // enforces this — the filter here just keeps the UI honest.
+      if (scopedDivisionId != null) {
+        query = query.eq('division_type_id', scopedDivisionId);
+      }
+
+      final rows = await query.order('created_at', ascending: false);
 
       // access_level 1 (top-level admin) accounts aren't manageable from
       // here, division_type_id 3 (SWM) belongs to a separate app this one
@@ -82,6 +112,20 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
   Future<void> _setStatus(Map<String, dynamic> member, String newStatus) async {
     final id = member['id']?.toString();
     if (id == null || id.isEmpty) return;
+
+    // Belt and braces: the list is already filtered, but never let a scoped
+    // manager act on a row outside their division if one ever reaches here.
+    final scopedDivisionId = _scopedDivisionTypeId;
+    if (scopedDivisionId != null &&
+        (member['division_type_id'] as num?)?.toInt() != scopedDivisionId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You can only manage members of your own division.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
 
     setState(() => _updatingIds.add(id));
 
@@ -206,20 +250,71 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
     }
 
     if (_members.isEmpty) {
-      return const Center(
+      final division = _divisionNames[_scopedDivisionTypeId];
+      return Center(
         child: Text(
-          'No members found.',
-          style: TextStyle(fontSize: 16, color: Color(0xFF636780)),
+          division == null
+              ? 'No members found.'
+              : 'No members found in $division.',
+          style: const TextStyle(fontSize: 16, color: Color(0xFF636780)),
         ),
       );
     }
 
+    // A scoped manager sees a short list by design — say why, so it doesn't
+    // read as missing data.
+    final scopeBanner = _buildScopeBanner();
+
     return ListView.separated(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      itemCount: _members.length,
+      itemCount: _members.length + (scopeBanner == null ? 0 : 1),
       separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) => _buildMemberCard(_members[index]),
+      itemBuilder: (context, index) {
+        if (scopeBanner != null) {
+          if (index == 0) return scopeBanner;
+          return _buildMemberCard(_members[index - 1]);
+        }
+        return _buildMemberCard(_members[index]);
+      },
+    );
+  }
+
+  /// Explains the division filter to an access_level 2 manager. Returns null
+  /// for anyone who manages every division.
+  Widget? _buildScopeBanner() {
+    final divisionId = _scopedDivisionTypeId;
+    if (divisionId == null) return null;
+
+    final divisionLabel = _divisionNames[divisionId] ?? 'your division';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFE7F1EC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFBFD8CC)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.filter_alt_outlined,
+            size: 18,
+            color: Color.fromARGB(255, 31, 103, 78),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Showing $divisionLabel members only — you manage your own '
+              'division.',
+              style: const TextStyle(
+                fontSize: 13,
+                color: Color(0xFF3A4A44),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
