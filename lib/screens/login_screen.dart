@@ -25,6 +25,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _isSendingReset = false;
   bool _obscurePassword = true;
   bool _rememberMe = true;
 
@@ -106,6 +107,119 @@ class _LoginScreenState extends State<LoginScreen> {
     final profile = AppUser.fromJson(profileData, id: userId);
     AuthSession.currentUser = profile;
     return profile;
+  }
+
+  /// Where Supabase should send the user after they click the recovery link
+  /// in their email.
+  ///
+  /// On web that is simply the deployed app's own origin. On mobile it is a
+  /// custom scheme that Android routes back into this app (see the
+  /// intent-filter in AndroidManifest.xml); supabase_flutter picks the link
+  /// up and emits [AuthChangeEvent.passwordRecovery], which main.dart turns
+  /// into a push to ResetPasswordScreen.
+  ///
+  /// Both values must be listed under Authentication → URL Configuration →
+  /// Redirect URLs in the Supabase dashboard, or the link comes back as
+  /// "requested path is invalid".
+  static String get passwordResetRedirect =>
+      kIsWeb ? '${Uri.base.origin}/' : 'com.example.tablet01://reset-password';
+
+  Future<void> _handleForgotPassword() async {
+    final controller =
+        TextEditingController(text: _emailController.text.trim());
+
+    final email = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Reset password'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              "Enter your account email and we'll send you a link to set a "
+              'new password.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: controller,
+              keyboardType: TextInputType.emailAddress,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                prefixIcon: Icon(Icons.email_outlined),
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (value) =>
+                  Navigator.of(dialogContext).pop(value.trim()),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.of(dialogContext).pop(controller.text.trim()),
+            child: const Text('Send link'),
+          ),
+        ],
+      ),
+    );
+
+    controller.dispose();
+
+    if (email == null || !mounted) return;
+
+    if (email.isEmpty || !email.contains('@')) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a valid email address')),
+      );
+      return;
+    }
+
+    setState(() => _isSendingReset = true);
+
+    try {
+      await Supabase.instance.client.auth
+          .resetPasswordForEmail(email, redirectTo: passwordResetRedirect)
+          .timeout(const Duration(seconds: 20));
+
+      if (!mounted) return;
+
+      // Worded so it reveals nothing about whether the address is actually
+      // registered — the same message shows either way.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'If an account exists for $email, a reset link is on its way. '
+            'Check your inbox and spam folder.',
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      final message = error is AuthException
+          ? error.message
+          : OfflineSyncService.isNetworkError(error)
+              ? 'Unable to reach the server (${_describeNetworkError(error)}).'
+              : 'Could not send the reset link. Please try again.';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 5),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSendingReset = false);
+    }
   }
 
   Future<void> _handleSignIn() async {
@@ -340,7 +454,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                           clipBehavior: Clip.antiAlias,
                           padding: const EdgeInsets.all(6),
-                          child: Image.asset('assets/logo.png', fit: BoxFit.contain),
+                          child: Image.asset('assets/logo.png',
+                              fit: BoxFit.contain),
                         ),
                       ),
                       const SizedBox(height: 22),
@@ -439,11 +554,47 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 22),
+                      const SizedBox(height: 8),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: (_isLoading || _isSendingReset)
+                              ? null
+                              : _handleForgotPassword,
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: _isSendingReset
+                              ? const SizedBox(
+                                  height: 15,
+                                  width: 15,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF1F674E),
+                                  ),
+                                )
+                              : const Text(
+                                  'Forgot password?',
+                                  style: TextStyle(
+                                    color: Color(0xFF1F674E),
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
                       SizedBox(
                         width: double.infinity,
                         child: ElevatedButton(
-                          onPressed: _isLoading ? null : _handleSignIn,
+                          onPressed: (_isLoading || _isSendingReset)
+                              ? null
+                              : _handleSignIn,
                           style: ElevatedButton.styleFrom(
                             backgroundColor:
                                 const Color.fromARGB(255, 0, 176, 80),
@@ -456,16 +607,17 @@ class _LoginScreenState extends State<LoginScreen> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: _isLoading
-                              ? const SizedBox(
-                                  height: 22,
-                                  width: 22,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2.4,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Text(
+                          // The spinner is shorter than the 'Sign In' text,
+                          // so swapping one for the other made the button
+                          // visibly shrink the moment it was pressed. Keep the
+                          // text laid out (just invisible) so the button holds
+                          // its height, and overlay the spinner on top of it.
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Opacity(
+                                opacity: _isLoading ? 0 : 1,
+                                child: const Text(
                                   'Sign In',
                                   style: TextStyle(
                                     fontSize: 25,
@@ -473,6 +625,18 @@ class _LoginScreenState extends State<LoginScreen> {
                                     color: Colors.white,
                                   ),
                                 ),
+                              ),
+                              if (_isLoading)
+                                const SizedBox(
+                                  height: 22,
+                                  width: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.4,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                       const SizedBox(height: 20),
@@ -516,4 +680,3 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
-

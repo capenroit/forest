@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../widget/export_options_dialog.dart';
+import '../widget/map_basemap.dart';
 import '../widget/polygon_calculator.dart';
 import '../widget/web_helper.dart' as web_helper;
 
@@ -29,6 +30,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage>
     with WidgetsBindingObserver {
+  MapBasemap _basemap = MapBasemap.light;
   int _treeGrowingCount = 0;
   int _totalSeedlingAvailable = 0;
   int _totalSeedlingRelease = 0;
@@ -1340,12 +1342,7 @@ class _DashboardPageState extends State<DashboardPage>
                               },
                             ),
                             children: [
-                              TileLayer(
-                                urlTemplate:
-                                    'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-                                subdomains: const ['a', 'b', 'c'],
-                                userAgentPackageName: 'com.example.envi_app',
-                              ),
+                              ...basemapTileLayers(_basemap),
                               if (_polygons.isNotEmpty)
                                 PolygonLayer(polygons: _polygons),
                               MarkerClusterLayerWidget(
@@ -1390,8 +1387,20 @@ class _DashboardPageState extends State<DashboardPage>
                                   },
                                 ),
                               ),
+                              BasemapAttribution(basemap: _basemap),
                             ],
                           ),
+                    ),
+                  ),
+                  // Basemap style picker
+                  Positioned(
+                    left: 12,
+                    top: 12,
+                    child: BasemapSwitcher(
+                      selected: _basemap,
+                      accentColor: Colors.teal.shade700,
+                      onChanged: (basemap) =>
+                          setState(() => _basemap = basemap),
                     ),
                   ),
                   // Capture map button

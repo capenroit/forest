@@ -1,17 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
+
 import 'screens/login_screen.dart';
+import 'screens/reset_password_screen.dart';
 import 'home_screen.dart';
 import 'service/api_service.dart';
 import 'service/auth_session.dart';
+import 'service/map_tile_cache_service.dart';
 import 'service/offline_sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await ApiService.initialize();
 
+  // Must happen before the first map tile is requested — it fixes the
+  // configuration of flutter_map's cache singleton.
+  await MapTileCacheService.configure();
+
   runApp(const MyApp());
+
+  // First launch only: pull down the Panay Island basemap so the dashboard
+  // map is already cached by the time anyone opens it, and stays cached
+  // across restarts. Never blocks startup.
+  MapTileCacheService.seedPanayIslandOnFirstRun().ignore();
 }
 
 class MyApp extends StatefulWidget {
@@ -22,7 +35,14 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  /// Needed so the password-recovery listener below can navigate without a
+  /// BuildContext of its own — the event arrives from supabase_flutter's
+  /// deep-link handler, outside the widget tree.
+  static final navigatorKey = GlobalKey<NavigatorState>();
+
   late Future<Widget> _initialScreen;
+  StreamSubscription<AuthState>? _authSubscription;
+  bool _handlingRecovery = false;
 
   @override
   void initState() {
@@ -30,6 +50,30 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _updateOrientation());
     _initialScreen = _loadInitialScreen();
+    _listenForPasswordRecovery();
+  }
+
+  /// Opening the reset link from the recovery email hands supabase_flutter a
+  /// short-lived session and fires [AuthChangeEvent.passwordRecovery]. That
+  /// session would otherwise drop the user straight onto the dashboard, so
+  /// intercept it and send them to ResetPasswordScreen instead.
+  void _listenForPasswordRecovery() {
+    _authSubscription =
+        Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      if (data.event != AuthChangeEvent.passwordRecovery) return;
+      // The event can be replayed (e.g. the same link re-opened while the
+      // reset screen is already up) — only act on the first one.
+      if (_handlingRecovery) return;
+      _handlingRecovery = true;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        navigatorKey.currentState?.pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const ResetPasswordScreen()),
+          (route) => false,
+        );
+        _handlingRecovery = false;
+      });
+    });
   }
 
   Future<Widget> _loadInitialScreen() async {
@@ -81,6 +125,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _authSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -115,6 +160,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
+      navigatorKey: navigatorKey,
       home: FutureBuilder<Widget>(
         future: _initialScreen,
         builder: (context, snapshot) {

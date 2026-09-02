@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../widget/export_options_dialog.dart';
+import '../widget/map_basemap.dart';
 import '../widget/polygon_calculator.dart';
 import '../widget/side_panel.dart';
 import '../widget/web_helper.dart' as web_helper;
@@ -33,6 +34,7 @@ class CoastalDashboardPage extends StatefulWidget {
 }
 
 class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
+  MapBasemap _basemap = MapBasemap.light;
   static const int _habitatAssessmentTypeId = 8;
   static const int _marineProtectedAreaTypeId = 9;
   static const int _mangrovePlantingTypeId = 6;
@@ -898,12 +900,7 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
                                   },
                                 ),
                                 children: [
-                                  TileLayer(
-                                    urlTemplate:
-                                        'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-                                    subdomains: const ['a', 'b', 'c'],
-                                    userAgentPackageName: 'com.example.envi_app',
-                                  ),
+                                  ...basemapTileLayers(_basemap),
                                   if (_polygons.isNotEmpty)
                                     PolygonLayer(polygons: _polygons),
                                   MarkerClusterLayerWidget(
@@ -942,8 +939,19 @@ class _CoastalDashboardPageState extends State<CoastalDashboardPage> {
                                       },
                                     ),
                                   ),
+                                  BasemapAttribution(basemap: _basemap),
                                 ],
                               ),
+                      ),
+                    ),
+                    Positioned(
+                      left: 12,
+                      top: 12,
+                      child: BasemapSwitcher(
+                        selected: _basemap,
+                        accentColor: Colors.teal.shade700,
+                        onChanged: (basemap) =>
+                            setState(() => _basemap = basemap),
                       ),
                     ),
                     Positioned(

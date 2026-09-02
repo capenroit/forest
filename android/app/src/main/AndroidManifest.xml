@@ -27,6 +27,20 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Routes the Supabase password-recovery link from the user's
+                 email back into the app. supabase_flutter picks the deep link
+                 up and emits AuthChangeEvent.passwordRecovery, which main.dart
+                 turns into a push to ResetPasswordScreen. The matching URL
+                 must also be allow-listed under Authentication > URL
+                 Configuration > Redirect URLs in the Supabase dashboard. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data
+                    android:scheme="com.example.tablet01"
+                    android:host="reset-password"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
