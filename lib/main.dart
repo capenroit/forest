@@ -159,6 +159,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      // Required on web: MaterialApp's `title` defaults to '' (not null), so
+      // WidgetsApp wraps the tree in Title('') and blanks document.title —
+      // wiping the <title> from web/index.html. Chrome then falls back to
+      // showing the raw URL in the tab. Setting it here restores the name.
+      title: 'iForest',
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
       home: FutureBuilder<Widget>(
