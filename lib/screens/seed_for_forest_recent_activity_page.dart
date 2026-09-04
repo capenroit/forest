@@ -16,8 +16,13 @@ class SeedForForestRecentActivityPage extends StatefulWidget {
       _SeedForForestRecentActivityPageState();
 }
 
+/// Who a seed record came from. A public donor types their own name; a
+/// nursery attendant is picked from the roster on the propagation form.
+enum _SeedSource { all, donor, nurseryAttendant }
+
 class _SeedForForestRecentActivityPageState
     extends State<SeedForForestRecentActivityPage> {
+  _SeedSource _sourceFilter = _SeedSource.all;
   final SupabaseClient _supabase = Supabase.instance.client;
   final SeedlingListService _seedlingListService = SeedlingListService();
 
@@ -150,23 +155,64 @@ class _SeedForForestRecentActivityPageState
                     );
                   }
 
-                  final activities =
+                  final allActivities =
                       snapshot.data?.$1 ?? const <SeedForForestEntry>[];
-                  final pendingItems =
+                  final allPending =
                       snapshot.data?.$2 ?? const <Map<String, dynamic>>[];
                   final loadError = snapshot.data?.$3;
+
+                  final attendantCount = allActivities
+                          .where((a) => a.isFromNurseryAttendant)
+                          .length +
+                      allPending.where(_pendingIsFromNurseryAttendant).length;
+                  final totalCount = allActivities.length + allPending.length;
+
+                  final activities = allActivities
+                      .where((a) => _matchesFilter(
+                          isFromNurseryAttendant: a.isFromNurseryAttendant))
+                      .toList();
+                  final pendingItems = allPending
+                      .where((item) => _matchesFilter(
+                          isFromNurseryAttendant:
+                              _pendingIsFromNurseryAttendant(item)))
+                      .toList();
+
+                  if (totalCount == 0 && loadError == null) {
+                    return const Center(
+                      child: Text('No seed donations found.'),
+                    );
+                  }
 
                   if (activities.isEmpty &&
                       pendingItems.isEmpty &&
                       loadError == null) {
-                    return const Center(
-                      child: Text('No seed donations found.'),
+                    return ListView(
+                      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                      children: [
+                        _buildSourceFilter(
+                          total: totalCount,
+                          attendantCount: attendantCount,
+                        ),
+                        const SizedBox(height: 40),
+                        Center(
+                          child: Text(
+                            _sourceFilter == _SeedSource.donor
+                                ? 'No donor records.'
+                                : 'No nursery attendant records.',
+                          ),
+                        ),
+                      ],
                     );
                   }
 
                   return ListView(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
                     children: [
+                      _buildSourceFilter(
+                        total: totalCount,
+                        attendantCount: attendantCount,
+                      ),
+                      const SizedBox(height: 14),
                       if (loadError != null) ...[
                         Padding(
                           padding: const EdgeInsets.only(bottom: 12),
@@ -985,11 +1031,85 @@ class _SeedForForestRecentActivityPageState
     }
   }
 
+  /// Source filter shown above the list.
+  ///
+  /// Counts are of every loaded record, not the filtered result, so the chips
+  /// still say how much is being hidden once a filter is active.
+  Widget _buildSourceFilter({
+    required int total,
+    required int attendantCount,
+  }) {
+    final donorCount = total - attendantCount;
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          _buildSourceChip(_SeedSource.all, 'All', total),
+          const SizedBox(width: 8),
+          _buildSourceChip(_SeedSource.donor, 'Donor', donorCount),
+          const SizedBox(width: 8),
+          _buildSourceChip(
+            _SeedSource.nurseryAttendant,
+            'Nursery Attendant',
+            attendantCount,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSourceChip(_SeedSource source, String label, int count) {
+    final selected = _sourceFilter == source;
+    const accent = Color.fromARGB(255, 31, 103, 78);
+
+    return ChoiceChip(
+      selected: selected,
+      onSelected: (_) => setState(() => _sourceFilter = source),
+      label: Text('$label ($count)'),
+      labelStyle: TextStyle(
+        fontSize: 12,
+        fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+        color: selected ? Colors.white : const Color(0xFF3A4A44),
+      ),
+      selectedColor: accent,
+      backgroundColor: Colors.white,
+      showCheckmark: false,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(
+          color: selected ? accent : const Color(0xFFD7E6DE),
+        ),
+      ),
+    );
+  }
+
+  /// Same rule as SeedForForestEntry.isFromNurseryAttendant, applied to a
+  /// queued-but-unsynced payload, so the filter covers pending records too.
+  bool _pendingIsFromNurseryAttendant(Map<String, dynamic> item) {
+    final payload = Map<String, dynamic>.from(item['payload'] as Map? ?? {});
+    final header =
+        Map<String, dynamic>.from(payload['headerPayload'] as Map? ?? {});
+    return header['nursery_attendant_id'] != null ||
+        header['nursery_id'] != null;
+  }
+
+  bool _matchesFilter({required bool isFromNurseryAttendant}) {
+    switch (_sourceFilter) {
+      case _SeedSource.all:
+        return true;
+      case _SeedSource.donor:
+        return !isFromNurseryAttendant;
+      case _SeedSource.nurseryAttendant:
+        return isFromNurseryAttendant;
+    }
+  }
+
   Future<List<SeedForForestEntry>> _loadRecentActivities() async {
     final response = await _supabase
         .from('seed_donation')
         .select(
-          'id, user_id, donor_name, donated_date, total_count, details, created_at, status, is_converted, survive',
+          'id, user_id, donor_name, donated_date, total_count, details, created_at, status, is_converted, survive, nursery_id, nursery_attendant_id',
         )
         .order('donated_date', ascending: false)
         .order('created_at', ascending: false)
@@ -1015,6 +1135,9 @@ class _SeedForForestRecentActivityPageState
             status: (data['status'] ?? 'DONATED').toString(),
             isConverted: (data['is_converted'] as bool?) ?? false,
             survive: (data['survive'] as num?)?.toInt(),
+            nurseryId: (data['nursery_id'] as num?)?.toInt(),
+            nurseryAttendantId:
+                (data['nursery_attendant_id'] as num?)?.toInt(),
           );
         })
         .toList();

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../widget/side_panel.dart';
+import 'nursery_attendant_accomplishment_page.dart';
 import 'setting_mangrove_page.dart';
+import 'setting_nursery_attendant_page.dart';
 import 'setting_nursery_page.dart';
 import 'setting_seedling_page.dart';
 
@@ -36,8 +38,8 @@ class _SettingsPageState extends State<SettingsPage> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.eco),
-              title: const Text('Seedling List'),
-              subtitle: const Text('Manage seedling names and details'),
+              title: const Text('Kind of Seeds'),
+              subtitle: const Text('Manage seed names and details'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () {
                 Navigator.push(
@@ -74,6 +76,43 @@ class _SettingsPageState extends State<SettingsPage> {
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const SettingNurseryPage()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.badge),
+              title: const Text('Nursery Attendants'),
+              subtitle: const Text(
+                'Manage the staff shown in "Propagated By"',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const SettingNurseryAttendantPage(),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              leading: const Icon(Icons.emoji_events),
+              title: const Text('Attendant Accomplishments'),
+              subtitle: const Text('Seeds propagated per nursery attendant'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        const NurseryAttendantAccomplishmentPage(),
+                  ),
                 );
               },
             ),

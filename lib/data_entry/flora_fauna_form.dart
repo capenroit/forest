@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart' as ll;
@@ -10,6 +8,7 @@ import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/location_capture_service.dart';
 import '../service/offline_sync_service.dart';
+import '../service/photo_upload_service.dart';
 import '../widget/add_flora_fauna_dialog.dart';
 import '../widget/edit_coordinate_dialog.dart';
 import '../widget/polygon_calculator.dart';
@@ -370,7 +369,11 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
   }
 
   String _extractFileExtension(String path) {
-    final lastSeparator = path.lastIndexOf(Platform.pathSeparator);
+    // Matches both separators instead of Platform.pathSeparator, which
+    // throws UnsupportedError on web. On web this "path" is a blob: URL
+    // with forward slashes and no extension anyway, so the caller's .jpg
+    // fallback takes over.
+    final lastSeparator = path.lastIndexOf(RegExp(r'[\\/]'));
     final fileName =
         lastSeparator >= 0 ? path.substring(lastSeparator + 1) : path;
     final dotIndex = fileName.lastIndexOf('.');
@@ -442,32 +445,16 @@ class _FloraFaunaFormState extends State<FloraFaunaForm> {
   Future<String> _uploadFloraFaunaPhotoToSupabase({
     required String localPath,
     required String photoName,
-  }) async {
-    final file = File(localPath);
-    if (!await file.exists()) {
-      throw Exception('Photo file does not exist: $localPath');
-    }
-
-    final objectPath = '$_floraFaunaStorageFolder/$photoName';
-    final contentType = _contentTypeFromPath(photoName);
-
-    await Supabase.instance.client.storage.from(_storageBucketName).upload(
-          objectPath,
-          file,
-          fileOptions: FileOptions(
-            upsert: false,
-            contentType: contentType,
-          ),
-        );
-
-    try {
-      await file.delete();
-    } catch (_) {
-      // Best effort only. File is temporary camera output.
-    }
-
-    final encodedBucket = Uri.encodeComponent(_storageBucketName);
-    return 'public/$encodedBucket/$objectPath';
+  }) {
+    // Goes through PhotoUploadService rather than File + Storage.upload:
+    // on web image_picker returns a blob: URL, which dart:io's File cannot
+    // open, so the photo silently failed to upload in the browser.
+    return PhotoUploadService.upload(
+      bucket: _storageBucketName,
+      objectPath: '$_floraFaunaStorageFolder/$photoName',
+      localPath: localPath,
+      contentType: _contentTypeFromPath(photoName),
+    );
   }
 
   Future<void> _captureCurrentLocation() async {

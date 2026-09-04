@@ -953,6 +953,9 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         child: SeedForForestForm(
           donorFieldLabel: 'Propagated By',
           showNurseryField: true,
+          // Propagation is done by nursery staff, so "Propagated By" picks
+          // from that nursery's roster rather than accepting a typed name.
+          useNurseryAttendant: true,
           formTitle: isCoastal ? 'Mangrove Data Entry' : 'Forest Data Entry',
           formSubtitle: 'Record propagation and seed list details',
           useMangroveSpeciesList: isCoastal,

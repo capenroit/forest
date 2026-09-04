@@ -154,6 +154,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
       } else if (tableName == 'crm_habitat_assssment' ||
           tableName == 'crm_marine_protected') {
         filteredQuery = filteredQuery.eq('is_deleted', 0);
+      } else if (tableName == 'seed_donation') {
+        // Public donations only. Propagation logged by nursery staff is
+        // reported per person under Nursery Attendant Accomplishment, so
+        // including it here would double-count the same seeds.
+        //
+        // Matches SeedForForestEntry.isFromNurseryAttendant: keyed on the
+        // columns only the propagation form writes, not on status, which
+        // users can edit from the activity list.
+        filteredQuery = filteredQuery
+            .isFilter('nursery_id', null)
+            .isFilter('nursery_attendant_id', null);
       }
 
       final completer = Completer<List<dynamic>>();
@@ -228,7 +239,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         try {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString(
-            'report_${_selectedProjectTypeId ?? 'all'}_cache',
+            _reportCacheKey,
             jsonEncode(finalData),
           );
         } catch (e) {
@@ -839,8 +850,32 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }).toList();
   }
 
+  /// Not a project_type row — an aggregate report over the
+  /// nursery_attendant_accomplishment view, appended to the same picker.
+  static const String _attendantAccomplishmentOption =
+      'Nursery Attendant Accomplishment';
+
+  bool get _isAttendantAccomplishmentSelected =>
+      _selectedProjectTypeName == _attendantAccomplishmentOption;
+
   String get _currentTableName =>
       _resolveTableNameForSelection(_selectedProjectTypeName);
+
+  /// Cache key for the current selection.
+  ///
+  /// Keyed on the selection name rather than the project type id, because the
+  /// id is null in two different situations -- during the very first load,
+  /// before _loadProjectTypes has resolved (the default Tree Growing report),
+  /// and for the Nursery Attendant Accomplishment option, which is not a
+  /// project_type row at all. An id-based key made those two share
+  /// 'report_all_cache', so one could be served the other's rows.
+  String get _reportCacheKey {
+    final slug = _selectedProjectTypeName
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_');
+    return 'report_${slug}_cache';
+  }
 
   /// Both "Seedling Inventory" and "Seedling Request" read from the same
   /// seedling_transaction table but render completely different views, so
@@ -878,6 +913,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'crm_habitat_assssment':
       case 'crm_marine_protected':
         return 'date';
+      case 'nursery_attendant_accomplishment':
+        return 'last_propagated_date';
       default:
         return 'planting_date';
     }
@@ -909,6 +946,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'marine protected area':
       case 'crm_marine_protected':
         return 'crm_marine_protected';
+      case 'nursery attendant accomplishment':
+      case 'nursery_attendant_accomplishment':
+        return 'nursery_attendant_accomplishment';
       default:
         return 'tree_growing';
     }
@@ -920,7 +960,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     try {
       final prefs = await SharedPreferences.getInstance();
       final cachedData =
-          prefs.getString('report_${_selectedProjectTypeId ?? 'all'}_cache');
+          prefs.getString(_reportCacheKey);
 
       if (cachedData != null) {
         try {
@@ -1065,11 +1105,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                               child: Text(name),
                                             );
                                           }),
+                                          const DropdownMenuItem(
+                                            value:
+                                                _attendantAccomplishmentOption,
+                                            child: Text(
+                                              _attendantAccomplishmentOption,
+                                            ),
+                                          ),
                                         ],
                                         onChanged: (value) {
                                           if (value == null) return;
                                           setState(() {
                                             _selectedProjectTypeName = value;
+                                            // Leaves the id null for the
+                                            // accomplishment option, which is
+                                            // not a project_type row.
                                             _selectedProjectTypeId = _toInt(
                                                 _projectTypes.firstWhere(
                                               (projectType) =>
@@ -1080,6 +1130,17 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                                   value,
                                               orElse: () => {},
                                             )['id']);
+
+                                            // The view already aggregates over
+                                            // all time, so a date range would
+                                            // only drop attendants without
+                                            // changing anyone's totals --
+                                            // misleading on an accomplishment
+                                            // report. Reset to All Time.
+                                            if (_isAttendantAccomplishmentSelected) {
+                                              _selectedPeriod = 'all';
+                                              _selectedDateRange = null;
+                                            }
                                           });
                                           _loadReport();
                                         },
@@ -1111,7 +1172,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                             child: Text('Date Range'),
                                           ),
                                         ],
-                                        onChanged: (value) async {
+                                        // Disabled for the accomplishment
+                                        // report: its totals are all-time, so
+                                        // narrowing the period would hide
+                                        // attendants while leaving every
+                                        // number unchanged.
+                                        onChanged: _isAttendantAccomplishmentSelected
+                                            ? null
+                                            : (value) async {
                                           if (value == null) return;
 
                                           if (value == 'date_range') {
@@ -1387,7 +1455,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ? 'Seedling Request Report'
             : 'Seedling Inventory Report';
       case 'seed_donation':
-        return 'Seed for a Forest Report';
+        return 'Seed for a Forest Report (Donors)';
       case 'tree_growing':
         if (_isMangrovePlantingSelected) return 'Mangrove Planting Report';
         return 'Tree Growing Report';
@@ -1395,6 +1463,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
         return 'Habitat Assessment Report';
       case 'crm_marine_protected':
         return 'Marine Protected Area Report';
+      case 'nursery_attendant_accomplishment':
+        return 'Nursery Attendant Accomplishment Report';
       default:
         return 'Tree Growing Report';
     }
@@ -1415,6 +1485,8 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'crm_habitat_assssment':
       case 'crm_marine_protected':
         return 'id';
+      case 'nursery_attendant_accomplishment':
+        return 'nursery_attendant_id';
       default:
         return 'seq_id';
     }
@@ -1460,6 +1532,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 'date',
               ]
             : ['no', 'species', ..._seedlingNurseryColumns, 'available'];
+      case 'nursery_attendant_accomplishment':
+        return [
+          'nursery_attendant_id',
+          'attendant_name',
+          'nursery_name',
+          'propagation_count',
+          'total_seeds',
+          'last_propagated_date',
+          'status',
+        ];
       case 'seed_donation':
         return [
           'id',
@@ -1570,6 +1652,12 @@ class _ReportsScreenState extends State<ReportsScreen> {
       'name': 'Name',
       'ordinance': 'Ordinance',
       'created_at': 'Date',
+      'nursery_attendant_id': 'No.',
+      'attendant_name': 'Attendant',
+      'nursery_name': 'Nursery',
+      'propagation_count': 'Records',
+      'total_seeds': 'Seeds Propagated',
+      'last_propagated_date': 'Last Propagated',
     };
     return nameMap[columnName] ?? columnName.replaceAll('_', ' ').toUpperCase();
   }
@@ -1593,7 +1681,13 @@ class _ReportsScreenState extends State<ReportsScreen> {
       case 'seed_species_name':
         return 0.14;
       case 'donor_name':
+      case 'attendant_name':
+      case 'nursery_name':
         return 0.16;
+      case 'propagation_count':
+      case 'total_seeds':
+      case 'last_propagated_date':
+        return 0.13;
       case 'status':
         return 0.12;
       case 'available':

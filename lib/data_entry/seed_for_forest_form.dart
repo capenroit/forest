@@ -16,6 +16,7 @@ class SeedForForestForm extends StatefulWidget {
     this.initialData,
     this.donorFieldLabel = 'Donor Name',
     this.showNurseryField = false,
+    this.useNurseryAttendant = false,
     this.formTitle = 'Seed for a Forest Data Entry',
     this.formSubtitle = 'Record donor and seed list details',
     this.useMangroveSpeciesList = false,
@@ -47,6 +48,18 @@ class SeedForForestForm extends StatefulWidget {
   /// When true, shows a required nursery dropdown and saves the selection
   /// to seed_donation.nursery_id.
   final bool showNurseryField;
+
+  /// When true, [donorFieldLabel] becomes a dropdown of that nursery's
+  /// attendants (public.nursery_attendant) instead of a free-text name, and
+  /// the chosen attendant is saved to seed_donation.nursery_attendant_id.
+  ///
+  /// This is what separates the two kinds of seed record: a member of the
+  /// public typing their own name, versus a nursery attendant picked from
+  /// the roster so their propagation work can be totalled per person.
+  /// donor_name is still written either way, so existing reports are
+  /// unaffected. Requires [showNurseryField], since the attendant list is
+  /// scoped to the selected nursery.
+  final bool useNurseryAttendant;
 
   /// Header title/subtitle — overridable so callers can repurpose this form
   /// (e.g. "Mangrove Data Entry") without changing the default used by the
@@ -80,6 +93,14 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
   /// nursery_id read from a pending draft's header payload, applied to
   /// _selectedNursery once _nurseryOptions finishes loading.
   int? _pendingNurseryId;
+
+  List<LookupOption> _attendantOptions = [];
+  LookupOption? _selectedAttendant;
+  bool _isLoadingAttendants = false;
+
+  /// nursery_attendant_id from a pending draft, applied once the attendant
+  /// list for the restored nursery has loaded.
+  int? _pendingAttendantId;
 
   @override
   void initState() {
@@ -118,6 +139,8 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
 
       if (widget.showNurseryField) {
         _pendingNurseryId = (header['nursery_id'] as num?)?.toInt();
+        _pendingAttendantId =
+            (header['nursery_attendant_id'] as num?)?.toInt();
       }
 
       _resolvePendingSeedNames(seedDetailRows);
@@ -239,12 +262,79 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
           }
         }
       });
+
+      if (widget.useNurseryAttendant && _selectedNursery != null) {
+        await _loadAttendantOptions(_selectedNursery!.id);
+      }
     } catch (_) {
       // Dropdown just stays empty; save-time validation catches it.
     } finally {
       if (mounted) {
         setState(() => _isLoadingNurseries = false);
       }
+    }
+  }
+
+  /// Loads the active attendants at [nurseryId] for the "Propagated By"
+  /// dropdown. Called whenever the nursery changes, because an attendant
+  /// only belongs to one nursery — keeping a selection made under the
+  /// previous nursery would save a mismatched pair.
+  Future<void> _loadAttendantOptions(int? nurseryId) async {
+    if (nurseryId == null) {
+      if (!mounted) return;
+      setState(() {
+        _attendantOptions = [];
+        _selectedAttendant = null;
+        _donorNameController.text = '';
+      });
+      return;
+    }
+
+    setState(() => _isLoadingAttendants = true);
+    try {
+      final rows = await _supabase
+          .from('nursery_attendant')
+          .select('seq_id, name')
+          .eq('nursery_id', nurseryId)
+          .eq('status', 'Active');
+
+      final options = (rows as List<dynamic>)
+          .map((row) => LookupOption(
+                id: (row['seq_id'] as num).toInt(),
+                name: (row['name'] as String).trim(),
+              ))
+          .where((option) => option.name.isNotEmpty)
+          .toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+      if (!mounted) return;
+      setState(() {
+        _attendantOptions = options;
+
+        final pendingId = _pendingAttendantId;
+        LookupOption? resolved;
+        for (final option in options) {
+          if (pendingId != null && option.id == pendingId) {
+            resolved = option;
+            break;
+          }
+          if (pendingId == null &&
+              _selectedAttendant != null &&
+              option.id == _selectedAttendant!.id) {
+            resolved = option;
+            break;
+          }
+        }
+        _pendingAttendantId = null;
+
+        // Drops a selection that isn't on this nursery's roster.
+        _selectedAttendant = resolved;
+        _donorNameController.text = resolved?.name ?? '';
+      });
+    } catch (_) {
+      // Dropdown just stays empty; its validator blocks the save.
+    } finally {
+      if (mounted) setState(() => _isLoadingAttendants = false);
     }
   }
 
@@ -270,6 +360,69 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
     _donorNameController.dispose();
     _remarksController.dispose();
     super.dispose();
+  }
+
+  Widget _buildNurseryDropdown() {
+    return DropdownButtonFormField<LookupOption>(
+      initialValue: _selectedNursery,
+      decoration: _modernInputDecoration(
+        label: 'Nursery',
+        hint: _isLoadingNurseries ? 'Loading nurseries...' : 'Select nursery',
+        icon: Icons.park_outlined,
+      ),
+      items: _nurseryOptions
+          .map((option) => DropdownMenuItem(
+                value: option,
+                child: Text(option.name),
+              ))
+          .toList(),
+      onChanged: _isLoadingNurseries
+          ? null
+          : (value) {
+              setState(() => _selectedNursery = value);
+              if (widget.useNurseryAttendant) {
+                _loadAttendantOptions(value?.id);
+              }
+            },
+      validator: (v) => v == null ? 'Required' : null,
+    );
+  }
+
+  Widget _buildAttendantDropdown() {
+    final noNurseryPicked = _selectedNursery == null;
+    final rosterEmpty = !_isLoadingAttendants && _attendantOptions.isEmpty;
+
+    return DropdownButtonFormField<LookupOption>(
+      initialValue: _selectedAttendant,
+      decoration: _modernInputDecoration(
+        label: widget.donorFieldLabel,
+        hint: noNurseryPicked
+            ? 'Select a nursery first'
+            : _isLoadingAttendants
+                ? 'Loading attendants...'
+                : rosterEmpty
+                    ? 'No attendants for this nursery'
+                    : 'Select ${widget.donorFieldLabel.toLowerCase()}',
+        icon: Icons.badge_outlined,
+      ),
+      items: _attendantOptions
+          .map((option) => DropdownMenuItem(
+                value: option,
+                child: Text(option.name),
+              ))
+          .toList(),
+      onChanged: (noNurseryPicked || _isLoadingAttendants)
+          ? null
+          : (value) {
+              setState(() {
+                _selectedAttendant = value;
+                // donor_name stays populated so every existing report,
+                // list and export keeps working for these records.
+                _donorNameController.text = value?.name ?? '';
+              });
+            },
+      validator: (v) => v == null ? 'Required' : null,
+    );
   }
 
   InputDecoration _modernInputDecoration({
@@ -398,40 +551,31 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
                       ),
                       child: Column(
                         children: [
-                          TextFormField(
-                            controller: _donorNameController,
-                            decoration: _modernInputDecoration(
-                              label: widget.donorFieldLabel,
-                              hint: 'Enter ${widget.donorFieldLabel.toLowerCase()}',
-                              icon: Icons.badge_outlined,
-                            ),
-                            validator: (v) =>
-                                v == null || v.trim().isEmpty ? 'Required' : null,
-                          ),
-                          if (widget.showNurseryField) ...[
+                          // In attendant mode the nursery comes first: the
+                          // attendant list is scoped to it, so asking for the
+                          // nursery second would mean picking a name before
+                          // there is a roster to pick from.
+                          if (widget.useNurseryAttendant) ...[
+                            _buildNurseryDropdown(),
                             const SizedBox(height: 10),
-                            DropdownButtonFormField<LookupOption>(
-                              initialValue: _selectedNursery,
+                            _buildAttendantDropdown(),
+                          ] else ...[
+                            TextFormField(
+                              controller: _donorNameController,
                               decoration: _modernInputDecoration(
-                                label: 'Nursery',
-                                hint: _isLoadingNurseries
-                                    ? 'Loading nurseries...'
-                                    : 'Select nursery',
-                                icon: Icons.park_outlined,
+                                label: widget.donorFieldLabel,
+                                hint:
+                                    'Enter ${widget.donorFieldLabel.toLowerCase()}',
+                                icon: Icons.badge_outlined,
                               ),
-                              items: _nurseryOptions
-                                  .map((option) => DropdownMenuItem(
-                                        value: option,
-                                        child: Text(option.name),
-                                      ))
-                                  .toList(),
-                              onChanged: _isLoadingNurseries
-                                  ? null
-                                  : (value) =>
-                                      setState(() => _selectedNursery = value),
-                              validator: (v) =>
-                                  v == null ? 'Required' : null,
+                              validator: (v) => v == null || v.trim().isEmpty
+                                  ? 'Required'
+                                  : null,
                             ),
+                            if (widget.showNurseryField) ...[
+                              const SizedBox(height: 10),
+                              _buildNurseryDropdown(),
+                            ],
                           ],
                         ],
                       ),
@@ -735,6 +879,11 @@ class _SeedForForestFormState extends State<SeedForForestForm> {
           'nursery_id': _selectedNursery!.id,
           'status': 'PROPAGATED',
         },
+        // The link that makes per-attendant accomplishment totals possible
+        // (see the nursery_attendant_accomplishment view). donor_name above
+        // still carries their name for the existing reports.
+        if (widget.useNurseryAttendant && _selectedAttendant != null)
+          'nursery_attendant_id': _selectedAttendant!.id,
       };
 
       // Same shape _supabase.from('seed_donation_data') rows have always

@@ -454,7 +454,7 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Seedling List Settings'),
+        title: const Text('Kind of Seeds Settings'),
         backgroundColor: const Color.fromARGB(255, 31, 103, 78),
         foregroundColor: Colors.white,
       ),
@@ -474,7 +474,7 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
                       children: [
                         const Expanded(
                           child: Text(
-                            'Seedling List',
+                            'Kind of Seeds',
                             style: TextStyle(
                               fontSize: 20,
                               fontWeight: FontWeight.w700,
