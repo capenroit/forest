@@ -25,6 +25,7 @@ dependencies:
   file_saver: ^0.2.9
   permission_handler: ^11.3.0
   share_plus: ^13.2.1
+  flutter_dotenv: ^6.0.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -35,6 +36,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo.png
+    - .env
 
 flutter_launcher_icons:
   image_path: "assets/logo.png"

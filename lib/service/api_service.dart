@@ -2,15 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'activity_model.dart';
 
 class ApiService {
-  // Supabase Configuration
-  static const String supabaseUrl = 'https://izemjvfzbfdlayewhxfy.supabase.co';
-  static const String supabaseAnonKey =
-      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml6ZW1qdmZ6YmZkbGF5ZXdoeGZ5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI2MzU5NTEsImV4cCI6MjA4ODIxMTk1MX0.VMiQELwUVkGM_3jAsT_DFL2p_mddXnWbLTOY5h2DHhQ';
+  // Supabase configuration — loaded from .env (see .env.example), never
+  // hardcoded here so different environments/CI builds can supply their own.
+  static String get supabaseUrl => dotenv.env['SUPABASE_URL'] ?? '';
+  static String get supabaseAnonKey => dotenv.env['SUPABASE_ANON_KEY'] ?? '';
 
   // Get Supabase client instance
   static SupabaseClient get _client => Supabase.instance.client;
@@ -19,6 +20,15 @@ class ApiService {
   // Initialize Supabase
   static Future<void> initialize() async {
     try {
+      await dotenv.load(fileName: '.env');
+
+      if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {
+        throw Exception(
+          'Missing SUPABASE_URL/SUPABASE_ANON_KEY. Copy .env.example to '
+          '.env and fill in your project values.',
+        );
+      }
+
       await Supabase.initialize(
         url: supabaseUrl,
         anonKey: supabaseAnonKey,

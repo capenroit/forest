@@ -5,6 +5,10 @@
 *.swp
 .DS_Store
 
+# Environment secrets — Supabase URL/anon key. Never commit the real
+# values; .env.example documents the expected keys.
+.env
+
 # Database migration/diagnostic scripts — these describe schema, RLS
 # policies, and function internals and shouldn't be pushed to a public repo.
 *.sql
