@@ -1664,6 +1664,11 @@ class _MangrovePlantingFormState extends State<MangrovePlantingForm> {
                                         );
                                       });
                                     },
+                                    onCreateType: (newName) async {
+                                      await ApiService.addMangroveSpeciesName(
+                                        name: newName,
+                                      );
+                                    },
                                   ),
                                 );
                               },

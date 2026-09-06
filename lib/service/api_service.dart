@@ -1702,6 +1702,15 @@ class ApiService {
           .select('id, name')
           .single();
 
+      await _loadMangroveSpeciesDiskCache();
+      final alreadyCached = _cachedMangroveSpeciesNames
+          .any((existing) => existing.toLowerCase() == trimmedName.toLowerCase());
+      if (!alreadyCached) {
+        _cachedMangroveSpeciesNames = [..._cachedMangroveSpeciesNames, trimmedName]
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        await _persistMangroveSpeciesCache();
+      }
+
       return response;
     } catch (e) {
       throw Exception('Error adding mangrove species: $e');

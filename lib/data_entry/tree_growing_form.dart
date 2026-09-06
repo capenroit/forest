@@ -1772,6 +1772,11 @@ class _TreeGrowingFormState extends State<TreeGrowingForm> {
                                   );
                                 });
                               },
+                              onCreateType: (newName) async {
+                                await seedlingListService.addSeedlingName(
+                                  seedlingName: newName,
+                                );
+                              },
                             ),
                           );
                         },
