@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data_entry/monitoring_mangrove_survival_form.dart';
@@ -571,6 +573,11 @@ class _MangroveSurvivalMonitoringPageState
 
       final mergedItems = _mergeRecordsByActivity(enrichedItems);
 
+      // Keep the offline fallback cache current with what's on screen now,
+      // so going offline mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheRecentRows(
+          'mangrove_survival_monitoring', mergedItems));
+
       await pendingFuture;
 
       if (!mounted) return;
@@ -583,11 +590,38 @@ class _MangroveSurvivalMonitoringPageState
       });
     } catch (e) {
       await pendingFuture;
+
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // cached from this page's own last successful load instead of
+      // leaving the screen blank/erroring when there's perfectly good
+      // cached data to show.
+      final cachedItems = await OfflineSyncService.getCachedRecentRows(
+          'mangrove_survival_monitoring');
+
       if (!mounted) return;
+
+      if (cachedItems.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        });
+        return;
+      }
+
       setState(() {
+        _items
+          ..clear()
+          ..addAll(cachedItems);
         _isLoading = false;
-        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved activities."),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 

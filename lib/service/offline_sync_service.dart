@@ -390,6 +390,59 @@ class OfflineSyncService {
     }
   }
 
+  // ─── Public API — cached "Recent Activity" rows for non-planting forms ──
+  //
+  // Generic counterpart to cacheActivities/getCachedActivities above, for
+  // Recent Activity lists that aren't TreePlanting-shaped (flora_fauna,
+  // and any future activity type that wants the same offline fallback):
+  // one shared file, keyed by an arbitrary [key] per activity type, each
+  // holding whatever raw server rows that list already renders from.
+
+  static Future<File> _recentRowsCacheFile() async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/recent_rows_cache.json');
+  }
+
+  static Future<void> cacheRecentRows(
+      String key, List<Map<String, dynamic>> rows) async {
+    try {
+      final file = await _recentRowsCacheFile();
+      Map<String, dynamic> cache = {};
+
+      if (await file.exists()) {
+        try {
+          final decoded = jsonDecode(await file.readAsString());
+          if (decoded is Map<String, dynamic>) cache = decoded;
+        } catch (_) {
+          // Corrupted cache — overwrite it below.
+        }
+      }
+
+      cache[key] = rows;
+      await file.writeAsString(jsonEncode(cache));
+    } catch (_) {
+      // Best effort — the fallback just stays empty.
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> getCachedRecentRows(
+      String key) async {
+    try {
+      final file = await _recentRowsCacheFile();
+      if (!await file.exists()) return [];
+
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is! Map<String, dynamic>) return [];
+
+      final rows = decoded[key];
+      if (rows is! List) return [];
+
+      return rows.cast<Map<String, dynamic>>();
+    } catch (_) {
+      return [];
+    }
+  }
+
   // ─── Public API — cached seedling rows for the survival-monitoring forms ─
   //
   // Write-through cache of tree_growing_data rows (species + planted count)
@@ -455,9 +508,106 @@ class OfflineSyncService {
       _safely(() => SeedlingListService().getSeedlingNames()),
       _safely(() => ApiService.getMangroveSpeciesNames()),
       _safely(_warmTreeGrowingCache),
+      _safely(_warmFloraFaunaCache),
+      _safely(_warmSeedForForestCache),
+      _safely(_warmHabitatAssessmentCache),
+      _safely(_warmMarineProtectedAreaCache),
       _safely(_warmDashboardMapCache),
       _safely(_warmCoastalMapCache),
     ]);
+  }
+
+  /// Caches the most recent Habitat Assessment rows (same 200-row window /
+  /// same species merge habitat_assessment_page.dart computes online), so
+  /// that page has something to fall back to if it goes offline before
+  /// ever loading them live itself. Keep the row shape here in sync with
+  /// that page's own `_serializeHabitatItems` — this is a separate copy
+  /// (not a shared call) because the page's version works off its private
+  /// `_HabitatActivityItem` model.
+  static Future<void> _warmHabitatAssessmentCache() async {
+    final assessments = await ApiService.getAllHabitatAssessments(limit: 200);
+    final ids = assessments.map((a) => a.id).whereType<int>().toList();
+    final dataByAssessmentId =
+        await ApiService.getHabitatAssessmentDataByAssessmentIds(ids);
+
+    final rows = assessments.map((assessment) {
+      final speciesRows = dataByAssessmentId[assessment.id ?? -1] ?? const [];
+      final species = speciesRows
+          .map((row) => (row['species_name'] ?? '').toString().trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .join(', ');
+      final totalCount = speciesRows.fold<int>(
+          0, (sum, row) => sum + ((row['count'] as num?)?.toInt() ?? 0));
+
+      return {
+        'id': assessment.id,
+        'userid': assessment.userid,
+        'municipality': assessment.municipality,
+        'barangay': assessment.barangay,
+        'type_assessment': assessment.typeAssessment,
+        'area': assessment.area,
+        'date': assessment.date.toIso8601String(),
+        'species': species.isNotEmpty ? species : 'Unspecified',
+        'total_count': totalCount,
+      };
+    }).toList();
+
+    await cacheRecentRows('habitat_assessment', rows);
+  }
+
+  /// Caches the most recent Marine Protected Area rows (same 200-row
+  /// window marine_protected_area_page.dart already shows online), so
+  /// that page has something to fall back to if it goes offline before
+  /// ever loading them live itself. Keep the row shape here in sync with
+  /// that page's own `_serializeMarineAreas`.
+  static Future<void> _warmMarineProtectedAreaCache() async {
+    final areas = await ApiService.getAllMarineProtectedAreas(limit: 200);
+    final rows = areas
+        .map((area) => {
+              'id': area.id,
+              'userid': area.userid,
+              'name': area.name,
+              'municipality': area.municipality,
+              'barangay': area.barangay,
+              'area': area.area,
+              'ordinance': area.ordinance,
+              'date': area.date.toIso8601String(),
+            })
+        .toList();
+    await cacheRecentRows('marine_protected_area', rows);
+  }
+
+  /// Caches the most recent Capiz Flora and Fauna Survey rows (same 100-row
+  /// window Recent Activity already shows online), so that page has
+  /// something to fall back to if it goes offline before ever loading them
+  /// live itself.
+  static Future<void> _warmFloraFaunaCache() async {
+    final rows = await ApiService.getRecentFloraFaunaSurveys(limit: 100);
+    await cacheRecentRows('flora_fauna', rows);
+  }
+
+  /// Caches the most recent Seed for a Forest donation rows (same 100-row
+  /// window / same query seed_for_forest_recent_activity_page.dart already
+  /// uses online), so that page has something to fall back to if it goes
+  /// offline before ever loading them live itself. Queries Supabase
+  /// directly rather than through ApiService, matching that page's own
+  /// online save/load code (it talks to 'seed_donation' directly too).
+  static Future<void> _warmSeedForForestCache() async {
+    final response = await Supabase.instance.client
+        .from('seed_donation')
+        .select(
+          'id, user_id, donor_name, donated_date, total_count, details, created_at, status, is_converted, survive, nursery_id, nursery_attendant_id',
+        )
+        .order('donated_date', ascending: false)
+        .order('created_at', ascending: false)
+        .limit(100)
+        .timeout(const Duration(seconds: 8));
+
+    final rows = (response as List<dynamic>)
+        .map((row) => Map<String, dynamic>.from(row as Map))
+        .toList();
+    await cacheRecentRows('seed_for_forest', rows);
   }
 
   /// Mirrors dashboard_page.dart's `_loadTreeGrowingMarkers` cache-write
@@ -587,7 +737,11 @@ class OfflineSyncService {
   /// per-seedling rows, so the survival-monitoring pickers have something to
   /// offer offline even for activities this device has never opened before.
   static Future<void> _warmTreeGrowingCache() async {
-    for (final projectTypeId in [_treeGrowingActivityTypeId, 6]) {
+    // Run both project types concurrently rather than one after the other —
+    // sequential awaits left a window where connectivity could drop right
+    // between the two, caching tree growing (type 1, done first) but never
+    // reaching mangrove planting (type 6).
+    await Future.wait([_treeGrowingActivityTypeId, 6].map((projectTypeId) async {
       try {
         final activities = await ApiService.getTreePlantingsByProjectTypeId(
           projectTypeId,
@@ -597,7 +751,7 @@ class OfflineSyncService {
 
         final seqIds =
             activities.map((a) => a.seqId).whereType<int>().toList();
-        if (seqIds.isEmpty) continue;
+        if (seqIds.isEmpty) return;
 
         final grouped = await ApiService.getTreeGrowingDataByTreeGrowingIds(
           seqIds,
@@ -608,7 +762,7 @@ class OfflineSyncService {
       } catch (_) {
         // Best effort per project type — leave the previous cache in place.
       }
-    }
+    }));
   }
 
   // ─── Sync dispatch ────────────────────────────────────────────────────────

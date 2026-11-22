@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data_entry/habitat_assessment_form.dart';
@@ -124,6 +126,11 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
         );
       }).toList();
 
+      // Keep the offline fallback cache current with what's on screen now,
+      // so going offline mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheRecentRows(
+          'habitat_assessment', _serializeHabitatItems(mapped)));
+
       if (!mounted) return;
       setState(() {
         _items
@@ -133,12 +140,79 @@ class _HabitatAssessmentPageState extends State<HabitatAssessmentPage> {
         _errorMessage = null;
       });
     } catch (e) {
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // cached from this page's own last successful load instead of
+      // leaving the screen blank/erroring when there's perfectly good
+      // cached data to show.
+      final cachedRows =
+          await OfflineSyncService.getCachedRecentRows('habitat_assessment');
+
       if (!mounted) return;
+
+      if (cachedRows.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        });
+        return;
+      }
+
       setState(() {
+        _items
+          ..clear()
+          ..addAll(_deserializeHabitatItems(cachedRows));
         _isLoading = false;
-        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved activities."),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
+  }
+
+  /// Flattens [_HabitatActivityItem] (its [HabitatAssessment] has no
+  /// toJson of its own) into plain JSON-safe maps for OfflineSyncService's
+  /// generic cache, and the matching reverse conversion for reading it back.
+  List<Map<String, dynamic>> _serializeHabitatItems(
+      List<_HabitatActivityItem> items) {
+    return items
+        .map((item) => {
+              'id': item.assessment.id,
+              'userid': item.assessment.userid,
+              'municipality': item.assessment.municipality,
+              'barangay': item.assessment.barangay,
+              'type_assessment': item.assessment.typeAssessment,
+              'area': item.assessment.area,
+              'date': item.assessment.date.toIso8601String(),
+              'species': item.species,
+              'total_count': item.totalCount,
+            })
+        .toList();
+  }
+
+  List<_HabitatActivityItem> _deserializeHabitatItems(
+      List<Map<String, dynamic>> rows) {
+    return rows.map((row) {
+      final assessment = HabitatAssessment(
+        id: (row['id'] as num?)?.toInt(),
+        userid: (row['userid'] as num?)?.toInt() ?? 0,
+        municipality: (row['municipality'] ?? '').toString(),
+        barangay: (row['barangay'] ?? '').toString(),
+        typeAssessment: (row['type_assessment'] ?? '').toString(),
+        area: (row['area'] as num?)?.toDouble(),
+        date: DateTime.tryParse((row['date'] ?? '').toString()) ??
+            DateTime.now(),
+      );
+      return _HabitatActivityItem(
+        assessment: assessment,
+        species: (row['species'] ?? 'Unspecified').toString(),
+        totalCount: (row['total_count'] as num?)?.toInt() ?? 0,
+      );
+    }).toList();
   }
 
   Future<void> _openAddDialog() async {

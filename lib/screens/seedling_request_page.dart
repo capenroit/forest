@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data_entry/seedling_request_form.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/add_seedling_request_detail_dialog.dart';
 import '../widget/side_panel.dart';
 
@@ -678,6 +681,11 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
       }).toList()
         ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
+      // Keep the offline fallback cache current with what's on screen now,
+      // so going offline mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheRecentRows(
+          'seedling_request', _serializeRequestGroups(loadedGroups)));
+
       if (!mounted) return;
       setState(() {
         _groups
@@ -687,12 +695,102 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
         _errorMessage = null;
       });
     } catch (e) {
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // cached from this page's own last successful load instead of
+      // leaving the screen blank/erroring when there's perfectly good
+      // cached data to show.
+      final cachedRows =
+          await OfflineSyncService.getCachedRecentRows('seedling_request');
+
       if (!mounted) return;
+
+      if (cachedRows.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Failed to load requests: $e';
+        });
+        return;
+      }
+
       setState(() {
+        _groups
+          ..clear()
+          ..addAll(_deserializeRequestGroups(cachedRows));
         _isLoading = false;
-        _errorMessage = 'Failed to load requests: $e';
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved requests."),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
     }
+  }
+
+  /// Flattens [_SeedlingRequestGroup] (including its nested item list) into
+  /// plain JSON-safe maps for OfflineSyncService's generic cache, and the
+  /// matching reverse conversion for reading it back.
+  List<Map<String, dynamic>> _serializeRequestGroups(
+      List<_SeedlingRequestGroup> groups) {
+    return groups
+        .map((group) => {
+              'group_key': group.groupKey,
+              'created_at': group.createdAt.toIso8601String(),
+              'release_to': group.releaseTo,
+              'release_by': group.releaseBy,
+              'items': group.items
+                  .map((item) => {
+                        'transaction_id': item.transactionId,
+                        'request_id': item.requestId,
+                        'seed_id': item.seedId,
+                        'species': item.species,
+                        'quantity': item.quantity,
+                        'created_at': item.createdAt.toIso8601String(),
+                        'nursery_id': item.nurseryId,
+                        'nursery': item.nursery,
+                        'release_by': item.releaseBy,
+                        'release_to': item.releaseTo,
+                        'user_id': item.userId,
+                      })
+                  .toList(),
+            })
+        .toList();
+  }
+
+  List<_SeedlingRequestGroup> _deserializeRequestGroups(
+      List<Map<String, dynamic>> rows) {
+    return rows.map((row) {
+      final itemsRaw = (row['items'] as List?) ?? const [];
+      final items = itemsRaw.map((entry) {
+        final map = Map<String, dynamic>.from(entry as Map);
+        return _SeedlingRequestItem(
+          transactionId: (map['transaction_id'] ?? '').toString(),
+          requestId: (map['request_id'] as num?)?.toInt(),
+          seedId: (map['seed_id'] as num?)?.toInt(),
+          species: (map['species'] ?? 'Unspecified').toString(),
+          quantity: (map['quantity'] as num?)?.toInt() ?? 0,
+          createdAt: DateTime.tryParse((map['created_at'] ?? '').toString()) ??
+              DateTime.now(),
+          nurseryId: (map['nursery_id'] as num?)?.toInt(),
+          nursery: (map['nursery'] ?? 'Unspecified').toString(),
+          releaseBy: (map['release_by'] ?? '').toString(),
+          releaseTo: (map['release_to'] ?? '').toString(),
+          userId: (map['user_id'] as num?)?.toInt(),
+        );
+      }).toList();
+
+      return _SeedlingRequestGroup(
+        groupKey: (row['group_key'] ?? '').toString(),
+        createdAt: DateTime.tryParse((row['created_at'] ?? '').toString()) ??
+            DateTime.now(),
+        releaseTo: (row['release_to'] ?? '').toString(),
+        releaseBy: row['release_by'] as String?,
+        items: items,
+      );
+    }).toList();
   }
 
   String _formatDate(DateTime date) {

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data_entry/mangrove_planting_form.dart';
@@ -611,6 +613,36 @@ class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityP
     );
   }
 
+  Future<List<_MangrovePlantingActivityItem>> _buildItems(
+    List<TreePlanting> plantings,
+    Map<int, List<Map<String, dynamic>>> dataByMangrovePlantingId,
+  ) async {
+    return plantings.map((planting) {
+      final rows = dataByMangrovePlantingId[planting.seqId ?? -1] ?? const [];
+
+      final speciesFromRows = rows
+          .map((row) => (row['seed_name'] ?? '').toString().trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .join(', ');
+
+      final treesFromRows = rows.fold<int>(0, (sum, row) {
+        final qty = (row['seedling_count'] as num?)?.toInt() ?? 0;
+        return sum + qty;
+      });
+
+      final species = speciesFromRows.isNotEmpty ? speciesFromRows : 'Unspecified';
+
+      final treesCount = treesFromRows > 0 ? treesFromRows : planting.numberOfTrees;
+
+      return _MangrovePlantingActivityItem(
+        planting: planting,
+        species: species,
+        treesCount: treesCount,
+      );
+    }).toList();
+  }
+
   Future<void> _loadRecentActivities({bool showLoader = true}) async {
     if (showLoader && mounted) {
       setState(() {
@@ -630,30 +662,15 @@ class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityP
       final dataByMangrovePlantingId =
           await ApiService.getTreeGrowingDataByTreeGrowingIds(seqIds);
 
-      final mapped = plantings.map((planting) {
-        final rows = dataByMangrovePlantingId[planting.seqId ?? -1] ?? const [];
+      final mapped = await _buildItems(plantings, dataByMangrovePlantingId);
 
-        final speciesFromRows = rows
-            .map((row) => (row['seed_name'] ?? '').toString().trim())
-            .where((name) => name.isNotEmpty)
-            .toSet()
-            .join(', ');
-
-        final treesFromRows = rows.fold<int>(0, (sum, row) {
-          final qty = (row['seedling_count'] as num?)?.toInt() ?? 0;
-          return sum + qty;
-        });
-
-        final species = speciesFromRows.isNotEmpty ? speciesFromRows : 'Unspecified';
-
-        final treesCount = treesFromRows > 0 ? treesFromRows : planting.numberOfTrees;
-
-        return _MangrovePlantingActivityItem(
-          planting: planting,
-          species: species,
-          treesCount: treesCount,
-        );
-      }).toList();
+      // Keep the offline fallback cache current with what's on screen now,
+      // not just whatever warmCache() last saw at login — so going offline
+      // mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheActivities(6, plantings));
+      for (final entry in dataByMangrovePlantingId.entries) {
+        unawaited(OfflineSyncService.cacheSeedRows(entry.key, entry.value));
+      }
 
       if (!mounted) return;
       setState(() {
@@ -664,11 +681,48 @@ class _MangrovePlantingActivityPageState extends State<MangrovePlantingActivityP
         _errorMessage = null;
       });
     } catch (e) {
+      // Live fetch failed — most likely offline. Fall back to the
+      // activities cache `OfflineSyncService.warmCache()` keeps for this
+      // project type (same 200-row window) instead of leaving the screen
+      // blank/erroring when there's perfectly good cached data to show.
+      final cachedPlantings =
+          await OfflineSyncService.getCachedActivities(6);
+
+      if (!mounted) return;
+
+      if (cachedPlantings.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        });
+        return;
+      }
+
+      final dataByMangrovePlantingId = <int, List<Map<String, dynamic>>>{};
+      for (final planting in cachedPlantings) {
+        final seqId = planting.seqId;
+        if (seqId == null) continue;
+        dataByMangrovePlantingId[seqId] =
+            await OfflineSyncService.getCachedSeedRows(seqId);
+      }
+
+      final mapped = await _buildItems(cachedPlantings, dataByMangrovePlantingId);
+
       if (!mounted) return;
       setState(() {
+        _items
+          ..clear()
+          ..addAll(mapped);
         _isLoading = false;
-        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved activities."),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 

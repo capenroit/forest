@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data_entry/flora_fauna_form.dart';
@@ -73,6 +75,41 @@ class _CapizFloraFaunaRecentActivityPageState
     );
   }
 
+  List<FloraFaunaEntry> _mapRows(List<Map<String, dynamic>> rows) {
+    return rows.map((row) {
+      final activityName = (row['activity_name'] ?? '').toString().trim();
+      final details = (row['details'] ?? '').toString().trim();
+      final observer = (row['observer'] ?? '').toString().trim();
+      final municipality = (row['municipality'] ?? '').toString().trim();
+      final barangay = (row['barangay'] ?? '').toString().trim();
+      final surveyDate = DateTime.tryParse(
+          (row['survey_date'] ?? row['created_at'] ?? row['updated_at'] ?? '')
+            .toString(),
+        ) ??
+        DateTime.now();
+
+      const entryType = 'Survey';
+      final speciesName =
+          activityName.isNotEmpty ? activityName : 'Survey Record';
+
+      return FloraFaunaEntry(
+        id: (row['id'] as num?)?.toInt(),
+        userId: (row['user_id'] ?? '').toString().isEmpty
+            ? null
+            : row['user_id'].toString(),
+        activityName: activityName,
+        entryType: entryType,
+        speciesName: speciesName,
+        scientificName: details,
+        areaHectares: (row['area'] as num?)?.toDouble(),
+        municipality: municipality,
+        barangay: barangay,
+        surveyDate: surveyDate,
+        observer: observer,
+      );
+    }).toList();
+  }
+
   Future<void> _loadRecentActivities({bool showLoader = true}) async {
     if (showLoader && mounted) {
       setState(() {
@@ -83,38 +120,11 @@ class _CapizFloraFaunaRecentActivityPageState
 
     try {
       final rows = await ApiService.getRecentFloraFaunaSurveys(limit: 100);
-      final mapped = rows.map((row) {
-        final activityName = (row['activity_name'] ?? '').toString().trim();
-        final details = (row['details'] ?? '').toString().trim();
-        final observer = (row['observer'] ?? '').toString().trim();
-        final municipality = (row['municipality'] ?? '').toString().trim();
-        final barangay = (row['barangay'] ?? '').toString().trim();
-        final surveyDate = DateTime.tryParse(
-            (row['survey_date'] ?? row['created_at'] ?? row['updated_at'] ?? '')
-              .toString(),
-          ) ??
-          DateTime.now();
+      final mapped = _mapRows(rows);
 
-        const entryType = 'Survey';
-        final speciesName =
-            activityName.isNotEmpty ? activityName : 'Survey Record';
-
-        return FloraFaunaEntry(
-          id: (row['id'] as num?)?.toInt(),
-          userId: (row['user_id'] ?? '').toString().isEmpty
-              ? null
-              : row['user_id'].toString(),
-          activityName: activityName,
-          entryType: entryType,
-          speciesName: speciesName,
-          scientificName: details,
-          areaHectares: (row['area'] as num?)?.toDouble(),
-          municipality: municipality,
-          barangay: barangay,
-          surveyDate: surveyDate,
-          observer: observer,
-        );
-      }).toList();
+      // Keep the offline fallback cache current with what's on screen now,
+      // so going offline mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheRecentRows('flora_fauna', rows));
 
       if (!mounted) return;
       setState(() {
@@ -125,11 +135,40 @@ class _CapizFloraFaunaRecentActivityPageState
         _errorMessage = null;
       });
     } catch (e) {
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // OfflineSyncService.warmCache() (or this page's own last successful
+      // load) cached, instead of leaving the screen blank/erroring when
+      // there's perfectly good cached data to show.
+      final cachedRows =
+          await OfflineSyncService.getCachedRecentRows('flora_fauna');
+
+      if (!mounted) return;
+
+      if (cachedRows.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        });
+        return;
+      }
+
+      final mapped = _mapRows(cachedRows);
+
       if (!mounted) return;
       setState(() {
+        _recentActivities
+          ..clear()
+          ..addAll(mapped);
         _isLoading = false;
-        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved activities."),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 

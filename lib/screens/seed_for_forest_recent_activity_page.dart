@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -48,7 +50,18 @@ class _SeedForForestRecentActivityPageState
     try {
       activities = await _loadRecentActivities();
     } catch (e) {
-      errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // cached from this page's own last successful load (or warmCache())
+      // instead of leaving the list empty when there's perfectly good
+      // cached data to show.
+      final cachedRows =
+          await OfflineSyncService.getCachedRecentRows('seed_for_forest');
+      if (cachedRows.isNotEmpty) {
+        activities = _mapSeedForForestRows(cachedRows);
+        errorMessage = "You're offline — showing the last saved activities.";
+      } else {
+        errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+      }
     }
 
     final pendingItems =
@@ -1115,32 +1128,41 @@ class _SeedForForestRecentActivityPageState
         .order('created_at', ascending: false)
         .limit(100);
 
-    return (response as List<dynamic>)
-        .map((row) {
-          final data = Map<String, dynamic>.from(row as Map);
-          final donatedDateRaw = (data['donated_date'] ?? '').toString();
-          final donatedDate = DateTime.tryParse(donatedDateRaw) ?? DateTime.now();
-          final totalCount = (data['total_count'] as num?)?.toInt() ?? 0;
-
-          return SeedForForestEntry(
-            id: (data['id'] as num?)?.toInt(),
-            userId: (data['user_id'] ?? '').toString().isEmpty
-                ? null
-                : data['user_id'].toString(),
-            donorName: (data['donor_name'] ?? '').toString(),
-            seedDetails: const [],
-            date: donatedDate,
-            totalCount: totalCount,
-            remarks: (data['details'] ?? '').toString(),
-            status: (data['status'] ?? 'DONATED').toString(),
-            isConverted: (data['is_converted'] as bool?) ?? false,
-            survive: (data['survive'] as num?)?.toInt(),
-            nurseryId: (data['nursery_id'] as num?)?.toInt(),
-            nurseryAttendantId:
-                (data['nursery_attendant_id'] as num?)?.toInt(),
-          );
-        })
+    final rows = (response as List<dynamic>)
+        .map((row) => Map<String, dynamic>.from(row as Map))
         .toList();
+
+    // Keep the offline fallback cache current with what's on screen now,
+    // so going offline mid-session still falls back to today's data.
+    unawaited(OfflineSyncService.cacheRecentRows('seed_for_forest', rows));
+
+    return _mapSeedForForestRows(rows);
+  }
+
+  List<SeedForForestEntry> _mapSeedForForestRows(
+      List<Map<String, dynamic>> rows) {
+    return rows.map((data) {
+      final donatedDateRaw = (data['donated_date'] ?? '').toString();
+      final donatedDate = DateTime.tryParse(donatedDateRaw) ?? DateTime.now();
+      final totalCount = (data['total_count'] as num?)?.toInt() ?? 0;
+
+      return SeedForForestEntry(
+        id: (data['id'] as num?)?.toInt(),
+        userId: (data['user_id'] ?? '').toString().isEmpty
+            ? null
+            : data['user_id'].toString(),
+        donorName: (data['donor_name'] ?? '').toString(),
+        seedDetails: const [],
+        date: donatedDate,
+        totalCount: totalCount,
+        remarks: (data['details'] ?? '').toString(),
+        status: (data['status'] ?? 'DONATED').toString(),
+        isConverted: (data['is_converted'] as bool?) ?? false,
+        survive: (data['survive'] as num?)?.toInt(),
+        nurseryId: (data['nursery_id'] as num?)?.toInt(),
+        nurseryAttendantId: (data['nursery_attendant_id'] as num?)?.toInt(),
+      );
+    }).toList();
   }
 }
 

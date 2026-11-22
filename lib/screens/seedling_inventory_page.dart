@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../data_entry/seed_for_forest_form.dart';
 import '../service/auth_session.dart';
 import '../service/lookup_service.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/side_panel.dart';
 
 class _PropagatedDonation {
@@ -894,6 +897,11 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
       }).toList()
         ..sort((a, b) => a.species.toLowerCase().compareTo(b.species.toLowerCase()));
 
+      // Keep the offline fallback cache current with what's on screen now,
+      // so going offline mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheRecentRows(
+          'seedling_inventory', _serializeAvailableSeedlings(loadedItems)));
+
       if (!mounted) return;
       setState(() {
         _items
@@ -903,12 +911,81 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
         _errorMessage = null;
       });
     } catch (e) {
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // cached from this page's own last successful load instead of
+      // leaving the screen blank/erroring when there's perfectly good
+      // cached data to show.
+      final cachedRows =
+          await OfflineSyncService.getCachedRecentRows('seedling_inventory');
+
       if (!mounted) return;
+
+      if (cachedRows.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Failed to load records: $e';
+        });
+        return;
+      }
+
       setState(() {
+        _items
+          ..clear()
+          ..addAll(_deserializeAvailableSeedlings(cachedRows));
         _isLoading = false;
-        _errorMessage = 'Failed to load records: $e';
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved inventory."),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
+  }
+
+  /// Flattens [_AvailableSeedlingItem] (including its nested nursery
+  /// breakdown) into plain JSON-safe maps for OfflineSyncService's generic
+  /// cache, and the matching reverse conversion for reading it back.
+  List<Map<String, dynamic>> _serializeAvailableSeedlings(
+      List<_AvailableSeedlingItem> items) {
+    return items
+        .map((item) => {
+              'seed_id': item.seedId,
+              'species': item.species,
+              'total_quantity': item.totalQuantity,
+              'nursery_breakdown': item.nurseryBreakdown
+                  .map((n) => {
+                        'nursery_id': n.nurseryId,
+                        'nursery': n.nursery,
+                        'quantity': n.quantity,
+                      })
+                  .toList(),
+            })
+        .toList();
+  }
+
+  List<_AvailableSeedlingItem> _deserializeAvailableSeedlings(
+      List<Map<String, dynamic>> rows) {
+    return rows.map((row) {
+      final breakdownRaw = (row['nursery_breakdown'] as List?) ?? const [];
+      final breakdown = breakdownRaw.map((entry) {
+        final map = Map<String, dynamic>.from(entry as Map);
+        return _NurseryQuantity(
+          nurseryId: (map['nursery_id'] as num?)?.toInt(),
+          nursery: (map['nursery'] ?? 'Unspecified').toString(),
+          quantity: (map['quantity'] as num?)?.toInt() ?? 0,
+        );
+      }).toList();
+
+      return _AvailableSeedlingItem(
+        seedId: (row['seed_id'] as num?)?.toInt(),
+        species: (row['species'] ?? 'Unspecified').toString(),
+        totalQuantity: (row['total_quantity'] as num?)?.toInt() ?? 0,
+        nurseryBreakdown: breakdown,
+      );
+    }).toList();
   }
 
   Future<int?> _resolveCurrentUserSeqId() async {

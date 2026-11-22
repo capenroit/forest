@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data_entry/marine_protected_area_form.dart';
@@ -45,6 +47,11 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
     try {
       final areas = await ApiService.getAllMarineProtectedAreas(limit: 200);
 
+      // Keep the offline fallback cache current with what's on screen now,
+      // so going offline mid-session still falls back to today's data.
+      unawaited(OfflineSyncService.cacheRecentRows(
+          'marine_protected_area', _serializeMarineAreas(areas)));
+
       if (!mounted) return;
       setState(() {
         _items
@@ -54,12 +61,74 @@ class _MarineProtectedAreaPageState extends State<MarineProtectedAreaPage> {
         _errorMessage = null;
       });
     } catch (e) {
+      // Live fetch failed — most likely offline. Fall back to the rows
+      // cached from this page's own last successful load instead of
+      // leaving the screen blank/erroring when there's perfectly good
+      // cached data to show.
+      final cachedRows = await OfflineSyncService.getCachedRecentRows(
+          'marine_protected_area');
+
       if (!mounted) return;
+
+      if (cachedRows.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        });
+        return;
+      }
+
       setState(() {
+        _items
+          ..clear()
+          ..addAll(_deserializeMarineAreas(cachedRows));
         _isLoading = false;
-        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
+        _errorMessage = null;
       });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("You're offline — showing the last saved activities."),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
+  }
+
+  /// [MarineProtectedArea] has no toJson of its own — flatten it into plain
+  /// JSON-safe maps for OfflineSyncService's generic cache, and the
+  /// matching reverse conversion for reading it back.
+  List<Map<String, dynamic>> _serializeMarineAreas(
+      List<MarineProtectedArea> areas) {
+    return areas
+        .map((area) => {
+              'id': area.id,
+              'userid': area.userid,
+              'name': area.name,
+              'municipality': area.municipality,
+              'barangay': area.barangay,
+              'area': area.area,
+              'ordinance': area.ordinance,
+              'date': area.date.toIso8601String(),
+            })
+        .toList();
+  }
+
+  List<MarineProtectedArea> _deserializeMarineAreas(
+      List<Map<String, dynamic>> rows) {
+    return rows
+        .map((row) => MarineProtectedArea(
+              id: (row['id'] as num?)?.toInt(),
+              userid: (row['userid'] as num?)?.toInt(),
+              name: (row['name'] ?? '').toString(),
+              municipality: (row['municipality'] ?? '').toString(),
+              barangay: (row['barangay'] ?? '').toString(),
+              area: (row['area'] as num?)?.toDouble(),
+              ordinance: row['ordinance'] as String?,
+              date: DateTime.tryParse((row['date'] ?? '').toString()) ??
+                  DateTime.now(),
+            ))
+        .toList();
   }
 
   Future<void> _loadPendingItems() async {

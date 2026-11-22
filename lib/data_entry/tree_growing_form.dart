@@ -16,8 +16,8 @@ import '../service/offline_sync_service.dart';
 import '../service/seedling_list_service.dart';
 import '../widget/add_seed_dialog.dart';
 import '../widget/edit_coordinate_dialog.dart';
-import '../../service/activity_model.dart';
-import '../../widget/polygon_calculator.dart';
+import '../service/activity_model.dart';
+import '../widget/polygon_calculator.dart';
 
 class SeedlingEntry {
   String seedlingType;
