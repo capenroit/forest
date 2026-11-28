@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 
 class SettingMangrovePage extends StatefulWidget {
   const SettingMangrovePage({super.key});
@@ -45,7 +46,7 @@ class _SettingMangrovePageState extends State<SettingMangrovePage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load mangrove species: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/side_panel.dart';
 
 class ManageMembersPage extends StatefulWidget {
@@ -104,7 +105,7 @@ class _ManageMembersPageState extends State<ManageMembersPage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load members: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }

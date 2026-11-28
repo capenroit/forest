@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 import '../service/seedling_list_service.dart';
 
 class SettingSeedlingPage extends StatefulWidget {
@@ -46,7 +47,7 @@ class _SettingSeedlingPageState extends State<SettingSeedlingPage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load seedlings: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
 import '../service/nursery_attendant_service.dart';
+import '../service/offline_sync_service.dart';
 
 /// Manages the nursery attendant roster that feeds the "Propagated By"
 /// dropdown on the propagation form.
@@ -78,7 +79,7 @@ class _SettingNurseryAttendantPageState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load attendants: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }

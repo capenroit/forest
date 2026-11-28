@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../service/api_service.dart';
 import '../service/auth_session.dart';
+import '../service/offline_sync_service.dart';
 
 class SettingNurseryPage extends StatefulWidget {
   const SettingNurseryPage({super.key});
@@ -56,7 +57,7 @@ class _SettingNurseryPageState extends State<SettingNurseryPage> {
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load nurseries: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }

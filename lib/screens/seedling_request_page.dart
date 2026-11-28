@@ -707,7 +707,7 @@ class _SeedlingRequestPageState extends State<SeedlingRequestPage> {
       if (cachedRows.isEmpty) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Failed to load requests: $e';
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
         });
         return;
       }

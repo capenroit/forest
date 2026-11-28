@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../service/api_service.dart';
 import '../service/nursery_attendant_service.dart';
+import '../service/offline_sync_service.dart';
 import '../widget/side_panel.dart';
 
 /// Per-attendant propagation totals, read from the
@@ -71,7 +72,7 @@ class _NurseryAttendantAccomplishmentPageState
       if (!mounted) return;
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load accomplishments: $e';
+        _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
       });
     }
   }

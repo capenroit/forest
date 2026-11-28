@@ -923,7 +923,7 @@ class _SeedlingInventoryPageState extends State<SeedlingInventoryPage> {
       if (cachedRows.isEmpty) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Failed to load records: $e';
+          _errorMessage = OfflineSyncService.friendlyErrorMessage(e);
         });
         return;
       }
